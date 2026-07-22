@@ -1,0 +1,19 @@
+{
+  "name": "bili-pet",
+  "version": "1.0.0",
+  "description": "a desktop study pet",
+  "main": "canva.js",
+  "scripts": {
+    "start": "electron .",
+    "launcher": "node launcher/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "electron": "^43.2.0",
+    "win-track": "^0.1.2"
+  }
+}

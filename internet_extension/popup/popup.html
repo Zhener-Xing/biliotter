@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bili Pet Bridge</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Bili Pet Bridge</h1>
+    <p id="bridge-status" class="muted">桥接检测中…</p>
+  </header>
+
+  <section class="settings">
+    <label class="switch-row">
+      <span>启用数据采集</span>
+      <input type="checkbox" id="recordingEnabled" />
+    </label>
+    <label class="switch-row">
+      <span>实时推送到桌面宠物</span>
+      <input type="checkbox" id="realtimePush" />
+    </label>
+    <p class="privacy">
+      仅记录观看进度、字幕上下文与离开视频等专注中断事件；不采集评论正文或搜索词。数据存在本机，可随时清空。
+    </p>
+  </section>
+
+  <section>
+    <h2>正在观看</h2>
+    <div id="current" class="card empty">打开 B 站视频页后这里会显示进度与字幕</div>
+  </section>
+
+  <section>
+    <h2>专注中断</h2>
+    <ul id="focus-log" class="list"></ul>
+  </section>
+
+  <section>
+    <h2>本片字幕长串（按观看累积）</h2>
+    <ul id="subtitle-log" class="list"></ul>
+  </section>
+
+  <footer>
+    <button type="button" id="refresh">刷新</button>
+    <button type="button" id="export" class="ghost">导出 JSON</button>
+    <button type="button" id="clear" class="ghost">清空</button>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+node_modules/
+.venv/
+.chrome-pet-profile/
+.DS_Store
+*.log
+assets/_preview/

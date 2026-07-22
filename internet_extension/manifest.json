@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Bili Pet Bridge",
+  "version": "0.2.5",
+  "description": "记录 B 站观看进度与字幕，检测离开视频等专注中断，并实时同步给桌面宠物",
+  "permissions": [
+    "storage",
+    "alarms",
+    "cookies",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.bilibili.com/*",
+    "*://*.hdslb.com/*",
+    "*://*.bilivideo.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Bili Pet Bridge",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.bilibili.com/video/*"],
+      "js": ["content/page-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://www.bilibili.com/video/*"],
+      "js": [
+        "lib/config.js",
+        "lib/schema.js",
+        "lib/subtitle.js",
+        "content/actions.js",
+        "content/video.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
