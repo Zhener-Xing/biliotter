@@ -1,7 +1,6 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { spawn, execFile, execFileSync } = require('child_process');
 const {
   listNoteDocs,
   loadNoteDoc,
@@ -19,20 +18,21 @@ const {
   addCourseGroupItem,
   updateCourseGroupItem,
   removeCourseGroupItem,
+  getCourseMindmap,
+  saveCourseMindmap,
+  listStudyActivity,
+  getStudyDay,
   ASSETS_DIR,
 } = require('../notes-db');
+const { generateCourseMindmap } = require('../course-mindmap');
 
 const HOST = '127.0.0.1';
 const PORT = 39262;
 const ROOT = path.join(__dirname, '..');
-const LAUNCHER_DIR = __dirname;
-const EXTENSION_DIR = path.join(ROOT, 'internet_extension');
-const CHROME_PROFILE = path.join(ROOT, '.chrome-pet-profile');
-const PID_FILE = path.join(ROOT, '.bili-pet.pid');
-const BILIBILI_URL = 'https://www.bilibili.com';
+const HOME_DIR = __dirname;
 
-/** @type {{ pid: number, kill?: Function, killed?: boolean, exitCode?: number | null } | import('child_process').ChildProcess | null} */
-let petProcess = null;
+/** @type {import('http').Server | null} */
+let homeServer = null;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -46,232 +46,6 @@ const MIME = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
 };
-
-function pidAlive(pid) {
-  if (!pid || !Number.isFinite(pid)) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function readPidFile() {
-  try {
-    if (!fs.existsSync(PID_FILE)) return null;
-    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
-    return Number.isFinite(pid) ? pid : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearPidFile() {
-  try {
-    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
-  } catch {
-    // ignore
-  }
-}
-
-function findPetPidsViaPgrep() {
-  try {
-    const out = execFileSync(
-      'pgrep',
-      ['-f', `electron.*${ROOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`],
-      { encoding: 'utf8' }
-    );
-    return out
-      .split('\n')
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => Number.isFinite(n) && n > 0);
-  } catch {
-    return [];
-  }
-}
-
-function adoptExistingPet() {
-  const fromFile = readPidFile();
-  if (fromFile && pidAlive(fromFile)) {
-    petProcess = { pid: fromFile };
-    return fromFile;
-  }
-
-  const found = findPetPidsViaPgrep();
-  if (found.length) {
-    const pid = found[0];
-    petProcess = { pid };
-    try {
-      fs.writeFileSync(PID_FILE, String(pid), 'utf8');
-    } catch {
-      // ignore
-    }
-    return pid;
-  }
-
-  if (fromFile) clearPidFile();
-  return null;
-}
-
-function isPetAlive() {
-  if (petProcess && pidAlive(petProcess.pid)) {
-    return true;
-  }
-  if (petProcess && (petProcess.killed || petProcess.exitCode != null)) {
-    petProcess = null;
-  } else if (petProcess && !pidAlive(petProcess.pid)) {
-    petProcess = null;
-  }
-
-  const adopted = adoptExistingPet();
-  return adopted != null;
-}
-
-function statusPayload() {
-  const running = isPetAlive();
-  return {
-    ok: true,
-    running,
-    petPid: running && petProcess ? petProcess.pid : null,
-    message: running ? '运行中' : '未运行',
-  };
-}
-
-function findElectronBin() {
-  const local = path.join(ROOT, 'node_modules', '.bin', 'electron');
-  if (fs.existsSync(local)) return local;
-  return null;
-}
-
-function findChromeBin() {
-  const candidates = [
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  ];
-  for (const bin of candidates) {
-    if (fs.existsSync(bin)) return bin;
-  }
-  return null;
-}
-
-function startPet() {
-  if (isPetAlive()) {
-    return { started: false, pid: petProcess.pid, message: '宠物已在运行' };
-  }
-
-  const electronBin = findElectronBin();
-  if (!electronBin) {
-    throw new Error('未找到 electron，请先在项目根目录执行 npm install');
-  }
-
-  const child = spawn(electronBin, ['.'], {
-    cwd: ROOT,
-    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
-    stdio: 'ignore',
-    detached: true,
-  });
-  child.unref();
-  child.on('exit', () => {
-    if (petProcess === child) petProcess = null;
-    clearPidFile();
-  });
-  petProcess = child;
-
-  try {
-    fs.writeFileSync(PID_FILE, String(child.pid), 'utf8');
-  } catch {
-    // ignore
-  }
-
-  return { started: true, pid: child.pid, message: '宠物已启动' };
-}
-
-function startChrome() {
-  const chromeBin = findChromeBin();
-  if (!chromeBin) {
-    return { status: 'skipped', message: '未找到 Chrome / Edge / Chromium，请手动加载扩展' };
-  }
-
-  if (!fs.existsSync(EXTENSION_DIR)) {
-    return { status: 'skipped', message: '扩展目录不存在：internet_extension' };
-  }
-
-  fs.mkdirSync(CHROME_PROFILE, { recursive: true });
-
-  const args = [
-    `--user-data-dir=${CHROME_PROFILE}`,
-    `--load-extension=${EXTENSION_DIR}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-    BILIBILI_URL,
-  ];
-
-  const child = spawn(chromeBin, args, {
-    stdio: 'ignore',
-    detached: true,
-  });
-  child.unref();
-
-  return { status: 'started', message: '已打开带扩展的浏览器' };
-}
-
-function killPidTree(pid) {
-  try {
-    process.kill(-pid, 'SIGTERM');
-  } catch {
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch (err) {
-      throw err;
-    }
-  }
-  // 稍后再强杀残留
-  setTimeout(() => {
-    if (pidAlive(pid)) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // ignore
-      }
-    }
-  }, 800);
-}
-
-function stopPet() {
-  isPetAlive();
-  const pids = new Set();
-  if (petProcess && petProcess.pid) pids.add(petProcess.pid);
-  const fromFile = readPidFile();
-  if (fromFile) pids.add(fromFile);
-  for (const pid of findPetPidsViaPgrep()) pids.add(pid);
-
-  if (pids.size === 0) {
-    petProcess = null;
-    clearPidFile();
-    return { stopped: false, message: '宠物未在运行' };
-  }
-
-  const errors = [];
-  for (const pid of pids) {
-    try {
-      killPidTree(pid);
-    } catch (err) {
-      errors.push(`${pid}: ${err.message || err}`);
-    }
-  }
-
-  petProcess = null;
-  clearPidFile();
-
-  if (errors.length && errors.length === pids.size) {
-    throw new Error(`终止失败：${errors.join('; ')}`);
-  }
-
-  return { stopped: true, message: '已终止宠物' };
-}
 
 function sendJson(res, code, data) {
   const body = JSON.stringify(data);
@@ -328,8 +102,8 @@ function serveStatic(req, res, urlPath) {
       return;
     }
   } else {
-    filePath = path.join(LAUNCHER_DIR, rel);
-    if (!filePath.startsWith(LAUNCHER_DIR)) {
+    filePath = path.join(HOME_DIR, rel);
+    if (!filePath.startsWith(HOME_DIR)) {
       res.writeHead(403);
       res.end('Forbidden');
       return;
@@ -349,45 +123,32 @@ function serveStatic(req, res, urlPath) {
 
 async function handleApi(req, res, urlPath) {
   if (req.method === 'GET' && urlPath === '/api/status') {
-    sendJson(res, 200, statusPayload());
+    sendJson(res, 200, { ok: true, service: 'bili-pet-home' });
     return;
   }
 
-  if (req.method === 'POST' && urlPath === '/api/start') {
-    await readBody(req);
-    try {
-      const pet = startPet();
-      // 已在运行时不再重复拉起浏览器
-      const chrome = pet.started
-        ? startChrome()
-        : { status: 'skipped', message: '宠物已在运行，跳过浏览器启动' };
-      sendJson(res, 200, {
-        ok: true,
-        petPid: pet.pid,
-        chrome: chrome.status,
-        started: pet.started,
-        message: `${pet.message}；${chrome.message}`,
-        running: true,
-      });
-    } catch (err) {
-      sendJson(res, 500, { ok: false, message: String(err.message || err), running: isPetAlive() });
-    }
-    return;
-  }
-
-  if (req.method === 'POST' && urlPath === '/api/stop') {
-    await readBody(req);
-    try {
-      const result = stopPet();
-      sendJson(res, 200, {
-        ok: true,
-        ...result,
-        running: false,
-        petPid: null,
-      });
-    } catch (err) {
-      sendJson(res, 500, { ok: false, message: String(err.message || err), running: isPetAlive() });
-    }
+  if (req.method === 'GET' && urlPath === '/api/activity/heatmap') {
+    const rawUrl = req.url || '';
+    const qs = rawUrl.includes('?') ? new URL(rawUrl, 'http://127.0.0.1').searchParams : null;
+    const days = qs ? Number(qs.get('days') || 371) : 371;
+    const daysList = listStudyActivity({ days });
+    const today = getStudyDay();
+    const totals = daysList.reduce(
+      (acc, row) => {
+        acc.studyMs += row.studyMs || 0;
+        acc.switchCount += row.switchCount || 0;
+        acc.distractCount += row.distractCount || 0;
+        acc.interruptCount += row.interruptCount || 0;
+        return acc;
+      },
+      { studyMs: 0, switchCount: 0, distractCount: 0, interruptCount: 0 }
+    );
+    sendJson(res, 200, {
+      ok: true,
+      days: daysList,
+      today,
+      totals,
+    });
     return;
   }
 
@@ -704,6 +465,75 @@ async function handleApi(req, res, urlPath) {
     }
   }
 
+  const courseMindmapMatch = urlPath.match(
+    /^\/api\/course-groups\/([^/]+)\/mindmap(?:\/(generate))?$/
+  );
+  if (courseMindmapMatch) {
+    const groupId = decodeURIComponent(courseMindmapMatch[1]);
+    const action = courseMindmapMatch[2] || '';
+
+    if (action === 'generate' && req.method === 'POST') {
+      await readBody(req);
+      try {
+        const result = await generateCourseMindmap(groupId);
+        if (!result.ok) {
+          const map = {
+            not_found: '课程组不存在',
+            no_items: '课程组还没有视频',
+            no_chunks: '组内笔记尚无切块，请先写笔记',
+            no_id: '课程组无效',
+          };
+          sendJson(res, result.error === 'not_found' ? 404 : 400, {
+            ok: false,
+            message: result.message || map[result.error] || result.error || '生成失败',
+          });
+          return;
+        }
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, { ok: false, message: String(err.message || err) });
+      }
+      return;
+    }
+
+    if (!action && req.method === 'GET') {
+      const result = getCourseMindmap(groupId);
+      if (!result.ok) {
+        sendJson(res, result.error === 'not_found' ? 404 : 400, {
+          ok: false,
+          message:
+            result.error === 'not_found' ? '课程组不存在' : result.error || '读取失败',
+        });
+        return;
+      }
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (!action && req.method === 'PUT') {
+      try {
+        const body = await readBody(req);
+        const data = body ? JSON.parse(body) : {};
+        const result = saveCourseMindmap(
+          groupId,
+          data.mindmapMd != null ? data.mindmapMd : data.mindmap_md
+        );
+        if (!result.ok) {
+          sendJson(res, result.error === 'not_found' ? 404 : 400, {
+            ok: false,
+            message:
+              result.error === 'not_found' ? '课程组不存在' : result.error || '保存失败',
+          });
+          return;
+        }
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 400, { ok: false, message: String(err.message || err) });
+      }
+      return;
+    }
+  }
+
   const courseMatch = urlPath.match(/^\/api\/course-groups\/([^/]+)$/);
   if (courseMatch) {
     const groupId = decodeURIComponent(courseMatch[1]);
@@ -764,36 +594,169 @@ async function handleApi(req, res, urlPath) {
   sendJson(res, 404, { ok: false, message: 'not found' });
 }
 
-const server = http.createServer(async (req, res) => {
-  const urlPath = (req.url || '/').split('?')[0];
+function createHomeServer() {
+  return http.createServer(async (req, res) => {
+    const urlPath = (req.url || '/').split('?')[0];
 
-  if (urlPath.startsWith('/api/')) {
-    try {
-      await handleApi(req, res, urlPath);
-    } catch (err) {
-      sendJson(res, 500, { ok: false, message: String(err.message || err) });
+    if (urlPath.startsWith('/api/')) {
+      try {
+        await handleApi(req, res, urlPath);
+      } catch (err) {
+        sendJson(res, 500, { ok: false, message: String(err.message || err) });
+      }
+      return;
     }
-    return;
+
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      serveStatic(req, res, urlPath);
+      return;
+    }
+
+    res.writeHead(405);
+    res.end('Method Not Allowed');
+  });
+}
+
+function listenHomeServer() {
+  return new Promise((resolve, reject) => {
+    const server = createHomeServer();
+    const onError = (err) => {
+      server.off('listening', onListening);
+      try {
+        server.close();
+      } catch {
+        /* ignore */
+      }
+      reject(err);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      homeServer = server;
+      console.log(`[bili-pet] home listening on http://${HOST}:${PORT}`);
+      resolve(server);
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(PORT, HOST);
+  });
+}
+
+/** 杀掉占用 home 端口、且不是当前进程的残留监听（常见于异常退出后的孤儿 node） */
+function freeHomePort() {
+  try {
+    const { execSync } = require('child_process');
+    const out = execSync(`lsof -nP -iTCP:${PORT} -sTCP:LISTEN -t`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const pids = String(out || '')
+      .split(/\s+/)
+      .map((x) => Number(x))
+      .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGTERM');
+        console.warn(`[bili-pet] freed home port ${PORT} by stopping pid ${pid}`);
+      } catch (err) {
+        console.warn(
+          `[bili-pet] could not stop pid ${pid} on :${PORT}:`,
+          err.message || err
+        );
+      }
+    }
+    return pids.length > 0;
+  } catch {
+    return false;
   }
+}
 
-  if (req.method === 'GET' || req.method === 'HEAD') {
-    serveStatic(req, res, urlPath);
-    return;
+function probeHomeServer(timeoutMs = 600) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      {
+        host: HOST,
+        port: PORT,
+        path: '/api/status',
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (c) => {
+          raw += c;
+        });
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(raw || '{}');
+            resolve(Boolean(res.statusCode === 200 && data && data.ok));
+          } catch {
+            resolve(false);
+          }
+        });
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on('error', () => resolve(false));
+  });
+}
+
+async function startHomeServer() {
+  if (homeServer) return homeServer;
+
+  try {
+    return await listenHomeServer();
+  } catch (err) {
+    if (!err || err.code !== 'EADDRINUSE') throw err;
+
+    // 端口被占：先探测是否已有可用服务；否则清残留再重试一次
+    if (await probeHomeServer()) {
+      console.warn(
+        `[bili-pet] home port ${PORT} already in use; reusing existing server`
+      );
+      homeServer = { external: true, close: (cb) => cb && cb() };
+      return homeServer;
+    }
+
+    freeHomePort();
+    await new Promise((r) => setTimeout(r, 350));
+    try {
+      return await listenHomeServer();
+    } catch (retryErr) {
+      if (retryErr && retryErr.code === 'EADDRINUSE' && (await probeHomeServer())) {
+        console.warn(
+          `[bili-pet] home port ${PORT} still busy; opening against existing server`
+        );
+        homeServer = { external: true, close: (cb) => cb && cb() };
+        return homeServer;
+      }
+      throw retryErr;
+    }
   }
+}
 
-  res.writeHead(405);
-  res.end('Method Not Allowed');
-});
+function stopHomeServer() {
+  return new Promise((resolve) => {
+    if (!homeServer) {
+      resolve();
+      return;
+    }
+    const server = homeServer;
+    homeServer = null;
+    if (server.external) {
+      resolve();
+      return;
+    }
+    server.close(() => resolve());
+  });
+}
 
-server.listen(PORT, HOST, () => {
-  const url = `http://${HOST}:${PORT}`;
-  console.log(`[launcher] ${url}`);
-
-  if (process.platform === 'darwin') {
-    execFile('open', [url], () => {});
-  } else if (process.platform === 'win32') {
-    execFile('cmd', ['/c', 'start', '', url], () => {});
-  } else {
-    execFile('xdg-open', [url], () => {});
-  }
-});
+module.exports = {
+  startHomeServer,
+  stopHomeServer,
+  probeHomeServer,
+  HOME_HOST: HOST,
+  HOME_PORT: PORT,
+  HOME_URL: `http://${HOST}:${PORT}/`,
+};

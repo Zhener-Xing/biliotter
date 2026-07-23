@@ -8,11 +8,57 @@ const chatClose = document.getElementById('chat-close');
 let chatMessages = [];
 let chatBusy = false;
 
+const BV_RE = /BV[\w]+/gi;
+
+function openHomeNote(bvid) {
+  const id = String(bvid || '').trim();
+  if (!id || !window.biliPet?.goHome) return;
+  void window.biliPet.goHome({ bvid: id });
+}
+
+/** 把回复里的 BV 号做成可点链接，跳转知识库对应笔记 */
+function fillTextWithBvLinks(el, text) {
+  const raw = String(text || '');
+  BV_RE.lastIndex = 0;
+  let last = 0;
+  let match;
+  let linked = false;
+  while ((match = BV_RE.exec(raw))) {
+    if (match.index > last) {
+      el.appendChild(document.createTextNode(raw.slice(last, match.index)));
+    }
+    const bvid = match[0];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chat-bv-link';
+    btn.textContent = bvid;
+    btn.title = '在知识库中打开这篇笔记';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openHomeNote(bvid);
+    });
+    el.appendChild(btn);
+    linked = true;
+    last = match.index + bvid.length;
+  }
+  if (last < raw.length) {
+    el.appendChild(document.createTextNode(raw.slice(last)));
+  }
+  if (!linked && last === 0) {
+    el.textContent = raw;
+  }
+}
+
 function appendChatMsg(role, text) {
   if (!chatLog || !text) return;
   const el = document.createElement('div');
   el.className = `chat-msg ${role === 'user' ? 'user' : role === 'system' ? 'system' : 'bot'}`;
-  el.textContent = text;
+  if (role === 'assistant' || role === 'bot') {
+    fillTextWithBvLinks(el, text);
+  } else {
+    el.textContent = text;
+  }
   chatLog.appendChild(el);
   chatLog.scrollTop = chatLog.scrollHeight;
 }

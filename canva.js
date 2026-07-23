@@ -1,12 +1,13 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, protocol } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const { startBridgeServer } = require('./bridge-server');
+const { startHomeServer, stopHomeServer, HOME_URL } = require('./launcher/server');
 const { loadEnv } = require('./load-env');
 const { createNotesOrganizer, chatCompletion } = require('./llm');
 const { getSystemPrompt } = require('./prompts');
 const { tryHandleCourseChat } = require('./course-actions');
+const { handleAccountPayload, loadAccount } = require('./account-bind');
 const {
   closeNotesDb,
   loadNoteDoc,
@@ -14,8 +15,24 @@ const {
   saveNoteAsset,
   searchNoteChunks,
   listNoteDocs,
+  addStudyMs,
+  addSwitchCount,
+  addDistractCount,
+  normalizeBvid,
   ASSETS_DIR,
 } = require('./notes-db');
+
+const STUDY_SWITCH_REASONS = new Set([
+  'pagehide',
+  'tab_hidden',
+  'window_blur',
+  'route_change',
+  'switch_bvid',
+]);
+
+let studyClock = null;
+const STUDY_CREDIT_CAP_MS = 10_000;
+let lastAccountRejectKey = '';
 
 loadEnv(path.join(__dirname, '.env'));
 
@@ -58,13 +75,14 @@ const PID_FILE = path.join(__dirname, '.bili-pet.pid');
 
 const PET_WINDOW = { width: 160, height: 180 };
 
-const LAUNCHER_HOME = 'http://127.0.0.1:39262/';
+const HOME_PAGE = HOME_URL;
 
 let mainWindow;
 let notesWindow = null;
 let chatWindow = null;
 let homeWindow = null;
 let bridgeServer;
+let homeServer;
 let latestEvent = null;
 /** 本片最完整的跟播快照（供一键整理用，不因 heartbeat 变瘦） */
 let noteContext = null;
@@ -72,8 +90,9 @@ let notesOrganizer = null;
 
 const MAX_NOTE_ASSET_BYTES = 8 * 1024 * 1024;
 
-/** ⌘D / ⌘O 近同时按下 → 结束学习 */
+/** ⌘D / ⌘O 近同时按下 → 结束学习；⌘C / ⌘O → 打开聊天 */
 let lastChordD = 0;
+let lastChordC = 0;
 let lastChordO = 0;
 const CHORD_MS = 500;
 
@@ -142,50 +161,6 @@ function endStudy() {
   quitAfterClosingSound();
 }
 
-async function launcherReachable() {
-  try {
-    const res = await fetch(`${LAUNCHER_HOME}api/status`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(800),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-/** 若未跑 npm run launcher，则后台拉起 launcher/server.js */
-async function ensureLauncherRunning() {
-  if (await launcherReachable()) return true;
-
-  const script = path.join(__dirname, 'launcher', 'server.js');
-  const candidates = ['node', '/usr/local/bin/node', '/opt/homebrew/bin/node'];
-  let started = false;
-  for (const bin of candidates) {
-    try {
-      const child = spawn(bin, [script], {
-        cwd: __dirname,
-        detached: true,
-        stdio: 'ignore',
-        env: process.env,
-      });
-      child.on('error', () => {});
-      child.unref();
-      started = true;
-      break;
-    } catch {
-      // try next
-    }
-  }
-  if (!started) return false;
-
-  for (let i = 0; i < 25; i++) {
-    await new Promise((r) => setTimeout(r, 200));
-    if (await launcherReachable()) return true;
-  }
-  return false;
-}
-
 function homePageBounds() {
   const anchor =
     mainWindow && !mainWindow.isDestroyed()
@@ -202,17 +177,33 @@ function homePageBounds() {
   };
 }
 
-/** 主页弹窗：打开 launcher，宠物保持显示；仅 ⌘D+O 结束进程 */
-async function goHome() {
-  const ok = await ensureLauncherRunning();
-  if (!ok) {
-    console.warn('[bili-pet] launcher 未能启动，请先执行 npm run launcher');
-    return { ok: false, launcher: false, error: 'launcher_unavailable' };
+/** 主页弹窗：知识库；可选打开指定笔记；宠物保持显示；仅 ⌘D+O 结束进程 */
+async function goHome(opts = {}) {
+  const raw =
+    opts && typeof opts === 'object'
+      ? opts.bvid || opts.noteBvid || ''
+      : opts;
+  const bvid = normalizeBvid(raw);
+
+  if (!homeServer) {
+    try {
+      homeServer = await startHomeServer();
+    } catch (err) {
+      console.warn('[bili-pet] home server failed:', err.message || err);
+      return { ok: false, error: 'home_unavailable' };
+    }
   }
+
+  const homeUrl = bvid
+    ? `${HOME_URL}?bvid=${encodeURIComponent(bvid)}`
+    : HOME_URL;
 
   if (homeWindow && !homeWindow.isDestroyed()) {
     homeWindow.focus();
-    return { ok: true, focused: true, launcher: true };
+    if (bvid) {
+      homeWindow.webContents.send('pet:openHomeNote', { bvid });
+    }
+    return { ok: true, focused: true, bvid: bvid || null };
   }
 
   const bounds = homePageBounds();
@@ -233,16 +224,15 @@ async function goHome() {
     },
   });
 
-  homeWindow.loadURL(LAUNCHER_HOME);
+  homeWindow.loadURL(homeUrl);
   homeWindow.on('closed', () => {
     homeWindow = null;
   });
 
-  return { ok: true, opened: true, launcher: true };
+  return { ok: true, opened: true, bvid: bvid || null };
 }
 
 function registerStopChord() {
-  // 学习期间占用 ⌘D / ⌘O：两者在短时间内先后触发即结束（≈ ⌘+D+O）
   const okD = globalShortcut.register('CommandOrControl+D', () => {
     lastChordD = Date.now();
     if (lastChordD - lastChordO <= CHORD_MS) endStudy();
@@ -250,6 +240,7 @@ function registerStopChord() {
   const okO = globalShortcut.register('CommandOrControl+O', () => {
     lastChordO = Date.now();
     if (lastChordO - lastChordD <= CHORD_MS) endStudy();
+    else if (lastChordO - lastChordC <= CHORD_MS) openChatWindow();
   });
   if (!okD || !okO) {
     console.warn('[bili-pet] failed to register ⌘D+O stop chord');
@@ -257,11 +248,13 @@ function registerStopChord() {
 }
 
 function registerChatShortcut() {
+  // ⌘C + ⌘O 短时间先后 → 打开聊天（单独 ⌘C 不再抢复制）
   const ok = globalShortcut.register('CommandOrControl+C', () => {
-    openChatWindow();
+    lastChordC = Date.now();
+    if (lastChordC - lastChordO <= CHORD_MS) openChatWindow();
   });
   if (!ok) {
-    console.warn('[bili-pet] failed to register ⌘C chat shortcut');
+    console.warn('[bili-pet] failed to register ⌘C+O chat chord');
   }
 }
 
@@ -549,8 +542,151 @@ function createWindow() {
   });
 }
 
+function flushStudyClock(at = Date.now()) {
+  if (!studyClock || studyClock.paused) return;
+  const delta = Math.max(0, at - studyClock.lastAt);
+  if (delta > 0) {
+    addStudyMs(Math.min(delta, STUDY_CREDIT_CAP_MS), at);
+  }
+  studyClock.lastAt = at;
+}
+
+function recordStudyActivity(payload) {
+  if (!payload?.kind) return;
+  const kind = String(payload.kind);
+  if (kind.startsWith('notes_') || kind === 'llm_reply') return;
+
+  const now = Number(payload.ts) || Date.now();
+
+  if (kind === 'session_start') {
+    studyClock = {
+      sessionId: payload.sessionId || null,
+      lastAt: now,
+      paused: false,
+    };
+    return;
+  }
+
+  if (kind === 'progress' || kind === 'heartbeat' || kind === 'session_meta') {
+    const paused = Boolean(payload.paused);
+    if (!studyClock) {
+      studyClock = {
+        sessionId: payload.sessionId || null,
+        lastAt: now,
+        paused,
+      };
+      return;
+    }
+    if (paused) {
+      flushStudyClock(now);
+      studyClock.paused = true;
+      return;
+    }
+    if (!studyClock.paused) flushStudyClock(now);
+    else studyClock.lastAt = now;
+    studyClock.paused = false;
+    return;
+  }
+
+  if (kind === 'focus_break') {
+    const reason = payload.detail?.reason || payload.reason;
+    const breakType = payload.type;
+    if (breakType === 'ui_scroll' || reason === 'scroll') {
+      addDistractCount(1, now);
+      return;
+    }
+    if (breakType === 'exit_video' || STUDY_SWITCH_REASONS.has(reason)) {
+      addSwitchCount(1, now);
+      flushStudyClock(now);
+      if (studyClock) studyClock.paused = true;
+    }
+    return;
+  }
+
+  if (kind === 'focus_resume') {
+    if (studyClock) {
+      studyClock.paused = false;
+      studyClock.lastAt = now;
+    }
+    return;
+  }
+
+  if (kind === 'session_end') {
+    flushStudyClock(now);
+    studyClock = null;
+  }
+}
+
 function onBridgeEvent(payload) {
+  if (!payload || typeof payload !== 'object') return;
+
+  const kind = String(payload.kind || '');
+  const gate = handleAccountPayload(payload);
+
+  if (kind === 'account_login' || kind === 'account_logout' || kind === 'account_hello') {
+    if (kind === 'account_logout' || gate.status === 'logged_out') {
+      flushStudyClock();
+      studyClock = null;
+    }
+    const event = {
+      ...payload,
+      bindStatus: gate.status,
+      boundUid: gate.account?.boundUid || null,
+      ok: gate.ok,
+    };
+    broadcastPetEvent(event, { touchLatest: false });
+    console.log(
+      `[bili-pet] account ${gate.status}`,
+      gate.uid || gate.account?.boundUid || '(none)'
+    );
+    return;
+  }
+
+  if (!gate.ok) {
+    const rejectKey = `${gate.status}:${gate.uid || ''}:${gate.account?.boundUid || ''}`;
+    if (rejectKey !== lastAccountRejectKey) {
+      lastAccountRejectKey = rejectKey;
+      broadcastPetEvent(
+        {
+          v: 1,
+          source: 'bili-pet',
+          kind: 'account_mismatch',
+          ts: Date.now(),
+          status: gate.status,
+          uid: gate.uid,
+          boundUid: gate.account?.boundUid || null,
+          account: payload.account || { uid: gate.uid, loggedIn: false },
+        },
+        { touchLatest: false }
+      );
+    }
+    return;
+  }
+  lastAccountRejectKey = '';
+
+  if (gate.status === 'auto_bound') {
+    broadcastPetEvent(
+      {
+        v: 1,
+        source: 'bili-pet',
+        kind: 'account_login',
+        ts: Date.now(),
+        account: { uid: gate.uid, loggedIn: true },
+        bindStatus: 'auto_bound',
+        boundUid: gate.uid,
+        ok: true,
+      },
+      { touchLatest: false }
+    );
+    console.log('[bili-pet] account auto_bound', gate.uid);
+  }
+
   broadcastPetEvent(payload);
+  try {
+    recordStudyActivity(payload);
+  } catch (err) {
+    console.warn('[bili-pet] study activity record failed', err);
+  }
   void notesOrganizer?.maybeHandle(payload);
 }
 
@@ -560,7 +696,7 @@ ipcMain.handle('pet:openNotesPage', () => openNotesWindow());
 
 ipcMain.handle('pet:openChatPage', () => openChatWindow());
 
-ipcMain.handle('pet:goHome', () => goHome());
+ipcMain.handle('pet:goHome', (_event, opts) => goHome(opts || {}));
 
 /**
  * 用用户问题检索笔记块：优先当前视频，再补全库，去重后最多 5 条。
@@ -891,6 +1027,17 @@ if (gotTheLock) {
     });
 
     writePidFile();
+    {
+      const acc = loadAccount();
+      if (acc.boundUid) {
+        console.log(
+          `[bili-pet] bound Bilibili uid=${acc.boundUid}` +
+            (acc.sessionLoggedIn ? ' (session logged in)' : ' (waiting browser login)')
+        );
+      } else {
+        console.log('[bili-pet] no bound account yet — will auto-bind on first Bilibili login');
+      }
+    }
     createWindow();
     registerStopChord();
     registerChatShortcut();
@@ -938,6 +1085,12 @@ if (gotTheLock) {
       console.error('[bili-pet] bridge failed to start:', err.message || err);
     }
 
+    try {
+      homeServer = await startHomeServer();
+    } catch (err) {
+      console.error('[bili-pet] home failed to start:', err.message || err);
+    }
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
@@ -954,6 +1107,9 @@ if (gotTheLock) {
       bridgeServer.close();
       bridgeServer = null;
     }
+    void stopHomeServer().then(() => {
+      homeServer = null;
+    });
     clearPidFile();
     if (process.platform !== 'darwin') app.quit();
   });

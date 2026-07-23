@@ -50,14 +50,44 @@
     } catch (_) {}
   }//发送事件
 
+  /** 从页面 Cookie / 初始态解析 UID，供 Cookie API 漏读时兜底 */
+  function readPageUid() {
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)DedeUserID=([^;]+)/);
+      const fromCookie = m ? String(m[1] || '').trim() : '';
+      if (fromCookie && fromCookie !== '0') return fromCookie;
+    } catch (_) {}
+    try {
+      const mid =
+        window.__INITIAL_STATE__?.loginInfo?.mid ||
+        window.__INITIAL_STATE__?.userInfo?.mid ||
+        window.__BILI_CONFIG__?.uid ||
+        null;
+      const s = mid != null ? String(mid).trim() : '';
+      if (s && s !== '0') return s;
+    } catch (_) {}
+    return null;
+  }
+
+  function reportAccountHint() {
+    const uid = readPageUid();
+    if (!uid) return;
+    try {
+      chrome.runtime.sendMessage({ type: 'BILI_PET_ACCOUNT_HINT', uid });
+    } catch (_) {}
+  }
+
   function getContext() {
+    const el = state.videoEl;
     return {
       sessionId: state.sessionId,
       bvid: state.bvid,
       cid: state.cid,
       title: state.title,
-      currentTime: state.videoEl?.currentTime ?? state.lastTime,
-      paused: Boolean(state.videoEl?.paused),
+      currentTime: el?.currentTime ?? state.lastTime,
+      // 尚无 video 时视为暂停，避免误报「播放中滑动」
+      paused: el ? Boolean(el.paused) : true,
+      hasVideo: Boolean(el),
     };
   }//获取上下文
 
@@ -382,6 +412,8 @@
   }//启动当前视频
 
   BiliActions.watchFocusBreaks(getContext);
+  reportAccountHint();
+  setTimeout(reportAccountHint, 1500);
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes.settings) return;

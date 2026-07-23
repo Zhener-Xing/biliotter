@@ -827,6 +827,230 @@
         place-items: center;
         color: var(--muted);
         font-size: 18px;
+        padding: 28px;
+      }
+
+      .side-foot {
+        flex-shrink: 0;
+        padding: 10px 12px 12px;
+        border-top: 3px solid var(--line);
+      }
+
+      .side-foot .btn {
+        width: 100%;
+        font-size: 13px;
+      }
+
+      .pane-activity {
+        padding: 16px 18px 18px;
+        overflow: auto;
+      }
+
+      .activity-card {
+        border: 3px solid var(--line);
+        background: var(--rail);
+        box-shadow: var(--shadow-soft);
+        padding: 16px 18px 14px;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      .activity-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+      }
+
+      .activity-title {
+        color: var(--ink);
+        font-size: 20px;
+        line-height: 1.2;
+      }
+
+      .activity-sub {
+        margin-top: 4px;
+        font-family: var(--font-body);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .activity-toggle {
+        display: inline-flex;
+        border: 3px solid var(--line);
+        background: var(--panel);
+        flex-shrink: 0;
+      }
+
+      .activity-toggle button {
+        appearance: none;
+        border: 0;
+        border-right: 3px solid var(--line);
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 13px;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+
+      .activity-toggle button:last-child { border-right: 0; }
+
+      .activity-toggle button:hover { color: var(--ink); background: rgba(59, 42, 31, 0.04); }
+
+      .activity-toggle button.active.study {
+        background: #239a3b;
+        color: #fff8f0;
+      }
+
+      .activity-toggle button.active.interrupt {
+        background: #c93c37;
+        color: #fff8f0;
+      }
+
+      .activity-summary {
+        font-family: var(--font-body);
+        font-size: 13px;
+        color: var(--ink);
+        margin-bottom: 12px;
+      }
+
+      .activity-summary strong {
+        font-weight: 700;
+        color: var(--accent-deep);
+      }
+
+      .heatmap-scroll {
+        overflow-x: auto;
+        overflow-y: hidden;
+        max-width: 100%;
+        padding-bottom: 6px;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .heatmap-scroll-inner {
+        width: max-content;
+        min-width: 100%;
+      }
+
+      .heatmap-months {
+        display: grid;
+        grid-auto-flow: column;
+        height: 14px;
+        margin: 0 0 6px 28px;
+        font-family: var(--font-body);
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      .heatmap-months span {
+        white-space: nowrap;
+        transform: translateX(-2px);
+      }
+
+      .heatmap-body {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+
+      .heatmap-wdays {
+        display: grid;
+        grid-template-rows: repeat(7, 12px);
+        gap: 3px;
+        font-family: var(--font-body);
+        font-size: 10px;
+        color: var(--muted);
+        width: 20px;
+        flex-shrink: 0;
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        background: var(--rail);
+      }
+
+      .heatmap-wdays span {
+        display: flex;
+        align-items: center;
+        height: 12px;
+      }
+
+      .heatmap-grid {
+        display: grid;
+        grid-auto-flow: column;
+        grid-template-rows: repeat(7, 12px);
+        grid-auto-columns: 12px;
+        gap: 3px;
+      }
+
+      .heat-cell {
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
+        background: #ebedf0;
+        outline: 1px solid rgba(27, 31, 35, 0.06);
+      }
+
+      .heat-cell.empty { background: transparent; outline: 0; }
+
+      .activity-card[data-metric="study"] .heat-cell.lv-0 { background: #ebedf0; }
+      .activity-card[data-metric="study"] .heat-cell.lv-1 { background: #9be9a8; }
+      .activity-card[data-metric="study"] .heat-cell.lv-2 { background: #40c463; }
+      .activity-card[data-metric="study"] .heat-cell.lv-3 { background: #30a14e; }
+      .activity-card[data-metric="study"] .heat-cell.lv-4 { background: #216e39; }
+
+      .activity-card[data-metric="interrupt"] .heat-cell.lv-0 { background: #ebedf0; }
+      .activity-card[data-metric="interrupt"] .heat-cell.lv-1 { background: #f9b4ae; }
+      .activity-card[data-metric="interrupt"] .heat-cell.lv-2 { background: #f07167; }
+      .activity-card[data-metric="interrupt"] .heat-cell.lv-3 { background: #db504a; }
+      .activity-card[data-metric="interrupt"] .heat-cell.lv-4 { background: #a32020; }
+
+      .heatmap-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 12px;
+        font-family: var(--font-body);
+        font-size: 11px;
+        color: var(--muted);
+        flex-wrap: wrap;
+      }
+
+      .heatmap-legend {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .heatmap-legend .heat-cell {
+        width: 11px;
+        height: 11px;
+      }
+
+      .heat-tip {
+        position: fixed;
+        z-index: 40;
+        pointer-events: none;
+        background: var(--toast-bg);
+        color: var(--toast-ink);
+        font-family: var(--font-body);
+        font-size: 12px;
+        padding: 6px 10px;
+        border: 2px solid var(--line);
+        box-shadow: 3px 3px 0 var(--line);
+        white-space: nowrap;
+        opacity: 0;
+        transform: translateY(4px);
+        transition: opacity 0.12s ease, transform 0.12s ease;
+      }
+
+      .heat-tip.show {
+        opacity: 1;
+        transform: translateY(0);
       }
 
       .doc-meta {
@@ -851,6 +1075,79 @@
         background: var(--slot-empty);
         padding: 16px 18px;
         box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.04);
+      }
+
+      .mm-status {
+        font-size: 12px;
+        color: var(--muted);
+        max-width: 280px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .pane-course {
+        padding-top: 10px;
+      }
+
+      .course-mm-head .doc-heading {
+        margin-bottom: 4px;
+        font-size: 22px;
+      }
+
+      .course-mm-split {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(200px, 34%) 1fr;
+        gap: 12px;
+        margin-top: 8px;
+      }
+
+      .course-mm-editor {
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        resize: none;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.55);
+      }
+
+      .course-mm-map {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.4);
+        overflow: hidden;
+      }
+
+      #course-mm-svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .course-mm-hint {
+        position: absolute;
+        left: 10px;
+        bottom: 8px;
+        margin: 0;
+        font-size: 11px;
+        color: var(--muted);
+        pointer-events: none;
+      }
+
+      @media (max-width: 900px) {
+        .course-mm-split {
+          grid-template-columns: 1fr;
+          grid-template-rows: 36% 1fr;
+        }
       }
 
       .md-body {
@@ -1050,6 +1347,10 @@
           <ul class="course-tree" id="course-list"></ul>
           <p class="list-empty" id="course-list-empty" hidden>还没有课程组</p>
         </div>
+
+        <div class="side-foot">
+          <button type="button" class="btn" id="btn-open-activity">学习活跃度</button>
+        </div>
       </aside>
 
       <section class="main">
@@ -1074,9 +1375,68 @@
           <span class="spacer"></span>
         </div>
 
-        <div class="pane" id="pane-welcome">
-          <p class="welcome">选择左侧笔记或课程组中的内容</p>
+        <div class="main-toolbar" id="toolbar-course" hidden>
+          <button type="button" class="btn primary" id="btn-mm-generate">一键生成导图</button>
+          <button type="button" class="btn" id="btn-mm-fit">适应画布</button>
+          <button type="button" class="btn" id="btn-mm-save">保存大纲</button>
+          <span class="spacer"></span>
+          <span class="mm-status" id="mm-status"></span>
         </div>
+
+        <div class="main-toolbar" id="toolbar-activity" hidden>
+          <button type="button" class="btn" id="btn-close-activity">关闭</button>
+          <span class="spacer"></span>
+        </div>
+
+        <div class="pane" id="pane-welcome">
+          <p class="welcome">选择左侧笔记，或点开课程组查看思维导图</p>
+        </div>
+
+        <div class="pane pane-activity" id="pane-activity" hidden>
+          <div class="activity-card" id="activity-card" data-metric="study">
+            <div class="activity-head">
+              <div>
+                <div class="activity-title" id="activity-title">学习时长</div>
+                <div class="activity-sub" id="activity-sub">过去一年每天学了多久</div>
+              </div>
+              <div class="activity-toggle" role="tablist" aria-label="活跃度类型">
+                <button type="button" class="active study" id="btn-heat-study" role="tab" aria-selected="true">学习</button>
+                <button type="button" class="interrupt" id="btn-heat-interrupt" role="tab" aria-selected="false">分心</button>
+              </div>
+            </div>
+            <p class="activity-summary" id="activity-summary">加载中…</p>
+            <div class="heatmap-scroll">
+              <div class="heatmap-scroll-inner">
+                <div class="heatmap-months" id="heatmap-months" aria-hidden="true"></div>
+                <div class="heatmap-body">
+                  <div class="heatmap-wdays" aria-hidden="true">
+                    <span></span>
+                    <span>一</span>
+                    <span></span>
+                    <span>三</span>
+                    <span></span>
+                    <span>五</span>
+                    <span></span>
+                  </div>
+                  <div class="heatmap-grid" id="heatmap-grid" role="img" aria-label="学习活跃度"></div>
+                </div>
+              </div>
+            </div>
+            <div class="heatmap-footer">
+              <span id="activity-today">今日 —</span>
+              <span class="heatmap-legend">
+                少
+                <span class="heat-cell lv-0"></span>
+                <span class="heat-cell lv-1"></span>
+                <span class="heat-cell lv-2"></span>
+                <span class="heat-cell lv-3"></span>
+                <span class="heat-cell lv-4"></span>
+                多
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="heat-tip" id="heat-tip" hidden></div>
 
         <div class="pane" id="pane-preview" hidden>
           <p class="doc-meta" id="preview-meta"></p>
@@ -1129,6 +1489,25 @@
             </div>
           </form>
         </div>
+
+        <div class="pane pane-course" id="pane-course" hidden>
+          <div class="course-mm-head">
+            <h2 class="doc-heading" id="course-mm-title">课程组</h2>
+            <p class="doc-meta" id="course-mm-meta"></p>
+          </div>
+          <div class="course-mm-split">
+            <textarea
+              id="course-mm-editor"
+              class="course-mm-editor"
+              spellcheck="false"
+              placeholder="用 # / ## / ### 写大纲；或点「一键生成导图」从组内笔记切块生成…"
+            ></textarea>
+            <div class="course-mm-map">
+              <svg id="course-mm-svg"></svg>
+              <p class="course-mm-hint">滚轮缩放 · 拖拽平移 · 点圆点折叠</p>
+            </div>
+          </div>
+        </div>
       </section>
 
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -1139,6 +1518,9 @@
     <script src="/notes-vendor/purify.min.js"></script>
     <script src="/notes-vendor/katex.min.js"></script>
     <script src="/notes-vendor/auto-render.min.js"></script>
+    <script src="/vendor/markmap/d3.min.js"></script>
+    <script src="/vendor/markmap/markmap-lib.js"></script>
+    <script src="/vendor/markmap/markmap-view.js"></script>
 
     <script>
       (function () {
@@ -1154,9 +1536,11 @@
         const panePreview = document.getElementById("pane-preview");
         const paneEdit = document.getElementById("pane-edit");
         const paneAssignCourse = document.getElementById("pane-assign-course");
+        const paneActivity = document.getElementById("pane-activity");
         const toolbarPreview = document.getElementById("toolbar-preview");
         const toolbarEdit = document.getElementById("toolbar-edit");
         const toolbarAssign = document.getElementById("toolbar-assign");
+        const toolbarActivity = document.getElementById("toolbar-activity");
         const tabNotes = document.getElementById("tab-notes");
         const tabCourses = document.getElementById("tab-courses");
         const panelNotes = document.getElementById("panel-notes");
@@ -1165,6 +1549,8 @@
         const courseListEmpty = document.getElementById("course-list-empty");
         const courseListCount = document.getElementById("course-list-count");
         const sideCreateBox = document.getElementById("side-create-box");
+        const btnOpenActivity = document.getElementById("btn-open-activity");
+        const btnCloseActivity = document.getElementById("btn-close-activity");
 
         const previewMeta = document.getElementById("preview-meta");
         const previewHeading = document.getElementById("preview-heading");
@@ -1174,6 +1560,16 @@
         const bodyInput = document.getElementById("body-input");
         const editPreview = document.getElementById("edit-preview");
         const saveHint = document.getElementById("save-hint");
+        const paneCourse = document.getElementById("pane-course");
+        const toolbarCourse = document.getElementById("toolbar-course");
+        const courseMmTitle = document.getElementById("course-mm-title");
+        const courseMmMeta = document.getElementById("course-mm-meta");
+        const courseMmEditor = document.getElementById("course-mm-editor");
+        const courseMmSvg = document.getElementById("course-mm-svg");
+        const mmStatus = document.getElementById("mm-status");
+        const btnMmGenerate = document.getElementById("btn-mm-generate");
+        const btnMmFit = document.getElementById("btn-mm-fit");
+        const btnMmSave = document.getElementById("btn-mm-save");
 
         let allNotes = [];
         let allCourses = [];
@@ -1200,6 +1596,27 @@
         const PREVIEW_DEBOUNCE_MS = 160;
         let searchTimer = null;
         let toastTimer = null;
+        let mmInstance = null;
+        let mmTransformer = null;
+        let mmRenderTimer = null;
+        let mmSaveTimer = null;
+        /** @type {"study" | "interrupt"} */
+        let activityMetric = "study";
+        /** @type {null | { days: any[], today: any, totals: any }} */
+        let activityData = null;
+
+        const activityCard = document.getElementById("activity-card");
+        const activityTitle = document.getElementById("activity-title");
+        const activitySub = document.getElementById("activity-sub");
+        const activitySummary = document.getElementById("activity-summary");
+        const activityToday = document.getElementById("activity-today");
+        const heatmapGrid = document.getElementById("heatmap-grid");
+        const heatmapMonths = document.getElementById("heatmap-months");
+        const heatTip = document.getElementById("heat-tip");
+        const btnHeatStudy = document.getElementById("btn-heat-study");
+        const btnHeatInterrupt = document.getElementById("btn-heat-interrupt");
+        let mmGenerating = false;
+        let mmLoadedGroupId = null;
 
         function showToast(message) {
           toastEl.textContent = message;
@@ -1225,6 +1642,248 @@
             throw new Error(data.message || "请求失败 (" + res.status + ")");
           }
           return data;
+        }
+
+        function formatStudyDuration(ms) {
+          const n = Math.max(0, Number(ms) || 0);
+          if (n <= 0) return "0 小时";
+          const hours = n / 3600000;
+          if (hours < 0.1) return Math.round(n / 60000) + " 分钟";
+          const fixed = hours >= 10 ? hours.toFixed(0) : hours.toFixed(1);
+          return fixed.replace(/\.0$/, "") + " 小时";
+        }
+
+        function studyLevel(ms) {
+          const h = (Number(ms) || 0) / 3600000;
+          if (h <= 0) return 0;
+          if (h < 0.5) return 1;
+          if (h < 1) return 2;
+          if (h < 2) return 3;
+          return 4;
+        }
+
+        function interruptLevel(count) {
+          const n = Number(count) || 0;
+          if (n <= 0) return 0;
+          if (n <= 2) return 1;
+          if (n <= 5) return 2;
+          if (n <= 10) return 3;
+          return 4;
+        }
+
+        function parseDayLocal(day) {
+          const parts = String(day || "").split("-").map(Number);
+          if (parts.length !== 3 || parts.some(function (x) { return !Number.isFinite(x); })) {
+            return null;
+          }
+          return new Date(parts[0], parts[1] - 1, parts[2]);
+        }
+
+        function formatDayLabel(day) {
+          const d = parseDayLocal(day);
+          if (!d) return day;
+          return (
+            d.getFullYear() +
+            "年" +
+            (d.getMonth() + 1) +
+            "月" +
+            d.getDate() +
+            "日"
+          );
+        }
+
+        function mondayIndex(date) {
+          // Mon=0 … Sun=6
+          return (date.getDay() + 6) % 7;
+        }
+
+        function hideHeatTip() {
+          if (!heatTip) return;
+          heatTip.classList.remove("show");
+          heatTip.hidden = true;
+        }
+
+        function showHeatTip(text, x, y) {
+          if (!heatTip) return;
+          heatTip.textContent = text;
+          heatTip.hidden = false;
+          heatTip.classList.add("show");
+          const pad = 12;
+          const rect = heatTip.getBoundingClientRect();
+          let left = x + 14;
+          let top = y - rect.height - 10;
+          if (left + rect.width > window.innerWidth - pad) {
+            left = x - rect.width - 14;
+          }
+          if (top < pad) top = y + 16;
+          heatTip.style.left = left + "px";
+          heatTip.style.top = top + "px";
+        }
+
+        function setActivityMetric(metric) {
+          activityMetric = metric === "interrupt" ? "interrupt" : "study";
+          if (activityCard) activityCard.setAttribute("data-metric", activityMetric);
+          if (btnHeatStudy) {
+            btnHeatStudy.classList.toggle("active", activityMetric === "study");
+            btnHeatStudy.setAttribute(
+              "aria-selected",
+              activityMetric === "study" ? "true" : "false"
+            );
+          }
+          if (btnHeatInterrupt) {
+            btnHeatInterrupt.classList.toggle("active", activityMetric === "interrupt");
+            btnHeatInterrupt.setAttribute(
+              "aria-selected",
+              activityMetric === "interrupt" ? "true" : "false"
+            );
+          }
+          if (activityTitle) {
+            activityTitle.textContent =
+              activityMetric === "study" ? "学习时长" : "切屏与分心";
+          }
+          if (activitySub) {
+            activitySub.textContent =
+              activityMetric === "study"
+                ? "过去一年每天学了多久"
+                : "过去一年每天切屏 + 分心次数";
+          }
+          renderActivityHeatmap();
+        }
+
+        function renderActivityHeatmap() {
+          if (!heatmapGrid || !activityData) return;
+          const days = Array.isArray(activityData.days) ? activityData.days : [];
+          const today = activityData.today || {};
+          const totals = activityData.totals || {};
+
+          if (activitySummary) {
+            if (activityMetric === "study") {
+              activitySummary.innerHTML =
+                "近一年共学习 <strong>" +
+                formatStudyDuration(totals.studyMs) +
+                "</strong>";
+            } else {
+              activitySummary.innerHTML =
+                "近一年切屏 <strong>" +
+                (totals.switchCount || 0) +
+                "</strong> 次 · 分心 <strong>" +
+                (totals.distractCount || 0) +
+                "</strong> 次（合计 " +
+                (totals.interruptCount || 0) +
+                "）";
+            }
+          }
+
+          if (activityToday) {
+            if (activityMetric === "study") {
+              activityToday.textContent =
+                "今日 " + formatStudyDuration(today.studyMs);
+            } else {
+              activityToday.textContent =
+                "今日打断 " + (today.interruptCount || 0) + " 次";
+            }
+          }
+
+          heatmapGrid.innerHTML = "";
+          if (heatmapMonths) heatmapMonths.innerHTML = "";
+          if (!days.length) return;
+
+          const first = parseDayLocal(days[0].day);
+          if (!first) return;
+          const lead = mondayIndex(first);
+
+          for (let i = 0; i < lead; i += 1) {
+            const pad = document.createElement("span");
+            pad.className = "heat-cell empty";
+            pad.setAttribute("aria-hidden", "true");
+            heatmapGrid.appendChild(pad);
+          }
+
+          const monthMarks = [];
+          let lastMonth = -1;
+          days.forEach(function (row, index) {
+            const d = parseDayLocal(row.day);
+            const cell = document.createElement("span");
+            const value =
+              activityMetric === "study"
+                ? Number(row.studyMs) || 0
+                : Number(row.interruptCount) || 0;
+            const level =
+              activityMetric === "study"
+                ? studyLevel(value)
+                : interruptLevel(value);
+            cell.className = "heat-cell lv-" + level;
+            cell.dataset.day = row.day;
+            cell.dataset.level = String(level);
+
+            let tip = formatDayLabel(row.day) + "：";
+            if (activityMetric === "study") {
+              tip += formatStudyDuration(row.studyMs);
+            } else {
+              tip +=
+                "切屏 " +
+                (row.switchCount || 0) +
+                " · 分心 " +
+                (row.distractCount || 0) +
+                "（共 " +
+                (row.interruptCount || 0) +
+                "）";
+            }
+            cell.title = tip;
+            cell.addEventListener("mouseenter", function (e) {
+              showHeatTip(tip, e.clientX, e.clientY);
+            });
+            cell.addEventListener("mousemove", function (e) {
+              showHeatTip(tip, e.clientX, e.clientY);
+            });
+            cell.addEventListener("mouseleave", hideHeatTip);
+            heatmapGrid.appendChild(cell);
+
+            if (d && d.getMonth() !== lastMonth) {
+              lastMonth = d.getMonth();
+              monthMarks.push({
+                label: d.getMonth() + 1 + "月",
+                week: Math.floor((lead + index) / 7),
+              });
+            }
+          });
+
+          if (heatmapMonths) {
+            const weekCount = Math.ceil((lead + days.length) / 7);
+            heatmapMonths.style.gridTemplateColumns =
+              "repeat(" + weekCount + ", 12px)";
+            heatmapMonths.style.columnGap = "3px";
+            const used = new Set();
+            monthMarks.forEach(function (mark) {
+              if (used.has(mark.week)) return;
+              used.add(mark.week);
+              const span = document.createElement("span");
+              span.textContent = mark.label;
+              span.style.gridColumn = String(mark.week + 1);
+              heatmapMonths.appendChild(span);
+            });
+          }
+
+          const scrollEl = heatmapGrid && heatmapGrid.closest(".heatmap-scroll");
+          if (scrollEl) {
+            scrollEl.scrollLeft = scrollEl.scrollWidth;
+          }
+        }
+
+        async function loadActivityHeatmap() {
+          try {
+            const data = await api("/api/activity/heatmap?days=371");
+            activityData = {
+              days: data.days || [],
+              today: data.today || {},
+              totals: data.totals || {},
+            };
+            renderActivityHeatmap();
+          } catch (err) {
+            if (activitySummary) {
+              activitySummary.textContent = err.message || "活跃度加载失败";
+            }
+          }
         }
 
         function formatTime(ts) {
@@ -1322,9 +1981,172 @@
           panePreview.hidden = next !== "preview";
           paneEdit.hidden = next !== "edit";
           paneAssignCourse.hidden = next !== "assign-course";
+          if (paneCourse) paneCourse.hidden = next !== "course";
+          if (paneActivity) paneActivity.hidden = next !== "activity";
           toolbarPreview.hidden = next !== "preview";
           toolbarEdit.hidden = next !== "edit";
           toolbarAssign.hidden = next !== "assign-course";
+          if (toolbarCourse) toolbarCourse.hidden = next !== "course";
+          if (toolbarActivity) toolbarActivity.hidden = next !== "activity";
+          if (next === "activity") loadActivityHeatmap();
+        }
+
+        function openActivityView() {
+          activeBvid = null;
+          activeCourseId = null;
+          activeCourse = null;
+          noteReturnContext = null;
+          setMode("activity");
+        }
+
+        function closeActivityView() {
+          setMode("welcome");
+        }
+
+        function setMmStatus(text) {
+          if (mmStatus) mmStatus.textContent = text || "";
+        }
+
+        function ensureMarkmap() {
+          if (mmTransformer && mmInstance) return true;
+          if (!window.markmap || !window.markmap.Transformer || !window.markmap.Markmap) {
+            setMmStatus("Markmap 脚本未加载");
+            return false;
+          }
+          if (!mmTransformer) mmTransformer = new window.markmap.Transformer();
+          return true;
+        }
+
+        function renderCourseMindmap(markdown) {
+          if (!ensureMarkmap() || !courseMmSvg) return;
+          try {
+            const md = String(markdown || "").trim() || "# 空导图\n## 点「一键生成导图」开始";
+            const { root } = mmTransformer.transform(md);
+            const opts = window.markmap.deriveOptions
+              ? window.markmap.deriveOptions({
+                  colorFreezeLevel: 2,
+                  maxWidth: 240,
+                  duration: 300,
+                  initialExpandLevel: 2,
+                })
+              : undefined;
+            if (!mmInstance) {
+              mmInstance = window.markmap.Markmap.create(courseMmSvg, opts, root);
+            } else {
+              mmInstance.setData(root);
+              mmInstance.fit();
+            }
+          } catch (err) {
+            console.warn("[mindmap]", err);
+            setMmStatus("渲染失败");
+          }
+        }
+
+        function scheduleCourseMindmapRender() {
+          clearTimeout(mmRenderTimer);
+          mmRenderTimer = setTimeout(function () {
+            renderCourseMindmap(courseMmEditor && courseMmEditor.value);
+          }, 280);
+        }
+
+        function scheduleCourseMindmapSave() {
+          clearTimeout(mmSaveTimer);
+          mmSaveTimer = setTimeout(function () {
+            void saveCourseMindmapNow({ silent: true });
+          }, 800);
+        }
+
+        async function saveCourseMindmapNow(opts) {
+          opts = opts || {};
+          const id = activeCourseId;
+          if (!id || !courseMmEditor) return;
+          try {
+            const data = await api(
+              "/api/course-groups/" + encodeURIComponent(id) + "/mindmap",
+              "PUT",
+              { mindmapMd: courseMmEditor.value }
+            );
+            if (courseDetails[id]) {
+              courseDetails[id].mindmapMd = data.mindmapMd;
+            }
+            if (!opts.silent) {
+              setMmStatus("已保存");
+              showToast("导图大纲已保存");
+            } else {
+              setMmStatus("已自动保存");
+            }
+          } catch (err) {
+            setMmStatus(err.message || "保存失败");
+            if (!opts.silent) showToast(err.message || "保存失败");
+          }
+        }
+
+        async function loadCourseMindmapPane(group) {
+          if (!group || !group.id) return;
+          setMode("course");
+          if (courseMmTitle) courseMmTitle.textContent = group.title || "课程组";
+          if (courseMmMeta) {
+            courseMmMeta.textContent =
+              (group.itemCount || 0) +
+              " 个视频 · " +
+              (group.folderCount || 0) +
+              " 个文件夹 · 更新于 " +
+              formatTime(group.updatedAt);
+          }
+
+          let md = String(group.mindmapMd || "");
+          if (mmLoadedGroupId !== group.id) {
+            mmLoadedGroupId = group.id;
+            try {
+              const data = await api(
+                "/api/course-groups/" + encodeURIComponent(group.id) + "/mindmap"
+              );
+              md = String(data.mindmapMd || "");
+              if (courseDetails[group.id]) {
+                courseDetails[group.id].mindmapMd = md;
+              }
+            } catch (_) {
+              /* use group.mindmapMd */
+            }
+          }
+
+          if (courseMmEditor) {
+            courseMmEditor.value = md;
+          }
+          renderCourseMindmap(md);
+          setMmStatus(md.trim() ? "可编辑大纲，或重新生成" : "尚未生成，点「一键生成导图」");
+        }
+
+        async function generateCourseMindmapUi() {
+          const id = activeCourseId;
+          if (!id || mmGenerating) return;
+          mmGenerating = true;
+          if (btnMmGenerate) btnMmGenerate.disabled = true;
+          setMmStatus("正在根据笔记切块生成…");
+          try {
+            const data = await api(
+              "/api/course-groups/" + encodeURIComponent(id) + "/mindmap/generate",
+              "POST",
+              {}
+            );
+            if (courseMmEditor) courseMmEditor.value = data.mindmapMd || "";
+            if (courseDetails[id]) courseDetails[id].mindmapMd = data.mindmapMd || "";
+            renderCourseMindmap(data.mindmapMd || "");
+            const src =
+              data.source === "llm"
+                ? "AI 已生成"
+                : data.source === "chunks_outline"
+                  ? "已用切块大纲生成（未启用 LLM）"
+                  : "已生成";
+            setMmStatus(src + " · " + (data.chunkCount || 0) + " 个切块");
+            showToast("导图已生成");
+          } catch (err) {
+            setMmStatus(err.message || "生成失败");
+            showToast(err.message || "生成失败");
+          } finally {
+            mmGenerating = false;
+            if (btnMmGenerate) btnMmGenerate.disabled = false;
+          }
         }
 
         function setSideView(view) {
@@ -2083,6 +2905,8 @@
             if (activeCourseId === key) {
               activeCourseId = null;
               activeCourse = null;
+              mmLoadedGroupId = null;
+              if (mode === "course") setMode("welcome");
             }
             renderCourseTree();
             return;
@@ -2104,6 +2928,7 @@
             setSideView("courses");
             if (sideCreateBox) sideCreateBox.classList.remove("show");
             renderCourseTree();
+            await loadCourseMindmapPane(group);
           } catch (err) {
             showToast(err.message || "打开课程组失败");
           }
@@ -2365,7 +3190,6 @@
           if (back && back.type === "course" && back.courseId) {
             setSideView("courses");
             await openCourse(back.courseId);
-            setMode("welcome");
             return;
           }
           noteReturnContext = null;
@@ -2387,6 +3211,22 @@
         tabCourses.addEventListener("click", function () {
           setSideView("courses");
         });
+        if (btnHeatStudy) {
+          btnHeatStudy.addEventListener("click", function () {
+            setActivityMetric("study");
+          });
+        }
+        if (btnHeatInterrupt) {
+          btnHeatInterrupt.addEventListener("click", function () {
+            setActivityMetric("interrupt");
+          });
+        }
+        if (btnOpenActivity) {
+          btnOpenActivity.addEventListener("click", openActivityView);
+        }
+        if (btnCloseActivity) {
+          btnCloseActivity.addEventListener("click", closeActivityView);
+        }
         document.getElementById("btn-new-course").addEventListener("click", showCreateCourse);
         document.getElementById("form-create-course").addEventListener("submit", createCourseFromForm);
         document.getElementById("btn-cancel-create-course").addEventListener("click", function () {
@@ -2402,11 +3242,11 @@
         });
 
         document.getElementById("btn-close-window").addEventListener("click", function () {
+          if (window.biliPet && typeof window.biliPet.closeWindow === "function") {
+            window.biliPet.closeWindow();
+            return;
+          }
           window.close();
-          setTimeout(function () {
-            document.body.innerHTML =
-              '<p style="font:400 18px ZCOOL KuaiLe,Nunito,sans-serif;padding:48px;color:#7a6352;text-align:center;line-height:1.7">已关闭知识库<br/><span style="font-size:14px;opacity:.85">可直接关掉此标签页</span></p>';
-          }, 120);
         });
         document.getElementById("btn-close-note").addEventListener("click", function () {
           closeNoteView();
@@ -2426,6 +3266,25 @@
         titleInput.addEventListener("input", scheduleSave);
         bodyInput.addEventListener("input", scheduleSave);
 
+        if (courseMmEditor) {
+          courseMmEditor.addEventListener("input", function () {
+            scheduleCourseMindmapRender();
+            scheduleCourseMindmapSave();
+            setMmStatus("编辑中…");
+          });
+        }
+        if (btnMmGenerate) btnMmGenerate.addEventListener("click", generateCourseMindmapUi);
+        if (btnMmFit) {
+          btnMmFit.addEventListener("click", function () {
+            if (mmInstance) mmInstance.fit();
+          });
+        }
+        if (btnMmSave) {
+          btnMmSave.addEventListener("click", function () {
+            void saveCourseMindmapNow({ silent: false });
+          });
+        }
+
         document.addEventListener("keydown", function (e) {
           if (e.key !== "Escape") return;
           if (mode === "edit") {
@@ -2434,6 +3293,10 @@
             closeNoteView();
           } else if (mode === "assign-course") {
             cancelAssignCourse();
+          } else if (mode === "course") {
+            setMode("welcome");
+          } else if (mode === "activity") {
+            closeActivityView();
           } else if (sideCreateBox && sideCreateBox.classList.contains("show")) {
             sideCreateBox.classList.remove("show");
           }
@@ -2441,8 +3304,28 @@
 
         setMode("welcome");
         setSideView("notes");
+        setActivityMetric("study");
         loadList();
         loadCourses();
+
+        function openHomeNoteFromBridge(payload) {
+          const bvid = String(payload && payload.bvid ? payload.bvid : "").trim();
+          if (!bvid) return;
+          void openPreview(bvid);
+        }
+
+        if (window.biliPet && typeof window.biliPet.onOpenHomeNote === "function") {
+          window.biliPet.onOpenHomeNote(openHomeNoteFromBridge);
+        }
+
+        try {
+          const bootBvid = new URLSearchParams(window.location.search).get("bvid");
+          if (bootBvid) {
+            void openPreview(bootBvid);
+          }
+        } catch (_) {
+          /* ignore */
+        }
       })();
     </script>
   </body>

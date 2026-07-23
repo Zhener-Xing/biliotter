@@ -82,10 +82,181 @@ function getDb() {
   backfillCreatedAt(db);
   ensureChunkTables(db);
   ensureCourseGroupTables(db);
+  ensureStudyActivityTables(db);
   migrateLegacyBufferOnce(db);
   backfillBodyMd(db);
   backfillAllChunksIfEmpty(db);
   return db;
+}
+
+function ensureStudyActivityTables(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS study_days (
+      day TEXT PRIMARY KEY NOT NULL,
+      study_ms INTEGER NOT NULL DEFAULT 0,
+      switch_count INTEGER NOT NULL DEFAULT 0,
+      distract_count INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+}
+
+/** 本地日历日 YYYY-MM-DD */
+function dayKeyFromTs(ts = Date.now()) {
+  const d = new Date(Number(ts) || Date.now());
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function ensureStudyDayRow(database, day, now = Date.now()) {
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO study_days (day, study_ms, switch_count, distract_count, updated_at)
+       VALUES (?, 0, 0, 0, ?)`
+    )
+    .run(day, now);
+}
+
+function addStudyMs(ms, at = Date.now()) {
+  const amount = Math.max(0, Math.floor(Number(ms) || 0));
+  if (!amount) return getStudyDay(dayKeyFromTs(at));
+  const database = getDb();
+  const day = dayKeyFromTs(at);
+  const now = Date.now();
+  ensureStudyDayRow(database, day, now);
+  database
+    .prepare(
+      `UPDATE study_days
+       SET study_ms = study_ms + ?, updated_at = ?
+       WHERE day = ?`
+    )
+    .run(amount, now, day);
+  return getStudyDay(day);
+}
+
+function addSwitchCount(n = 1, at = Date.now()) {
+  const amount = Math.max(0, Math.floor(Number(n) || 0));
+  if (!amount) return getStudyDay(dayKeyFromTs(at));
+  const database = getDb();
+  const day = dayKeyFromTs(at);
+  const now = Date.now();
+  ensureStudyDayRow(database, day, now);
+  database
+    .prepare(
+      `UPDATE study_days
+       SET switch_count = switch_count + ?, updated_at = ?
+       WHERE day = ?`
+    )
+    .run(amount, now, day);
+  return getStudyDay(day);
+}
+
+function addDistractCount(n = 1, at = Date.now()) {
+  const amount = Math.max(0, Math.floor(Number(n) || 0));
+  if (!amount) return getStudyDay(dayKeyFromTs(at));
+  const database = getDb();
+  const day = dayKeyFromTs(at);
+  const now = Date.now();
+  ensureStudyDayRow(database, day, now);
+  database
+    .prepare(
+      `UPDATE study_days
+       SET distract_count = distract_count + ?, updated_at = ?
+       WHERE day = ?`
+    )
+    .run(amount, now, day);
+  return getStudyDay(day);
+}
+
+function getStudyDay(day) {
+  const key = String(day || dayKeyFromTs());
+  const row = getDb()
+    .prepare(
+      `SELECT day, study_ms AS studyMs, switch_count AS switchCount,
+              distract_count AS distractCount, updated_at AS updatedAt
+       FROM study_days WHERE day = ?`
+    )
+    .get(key);
+  if (!row) {
+    return {
+      day: key,
+      studyMs: 0,
+      switchCount: 0,
+      distractCount: 0,
+      interruptCount: 0,
+      updatedAt: null,
+    };
+  }
+  return {
+    day: row.day,
+    studyMs: Number(row.studyMs) || 0,
+    switchCount: Number(row.switchCount) || 0,
+    distractCount: Number(row.distractCount) || 0,
+    interruptCount: (Number(row.switchCount) || 0) + (Number(row.distractCount) || 0),
+    updatedAt: row.updatedAt == null ? null : Number(row.updatedAt),
+  };
+}
+
+/**
+ * 拉取连续日历日活跃度（含无数据的空天），默认约一年。
+ * @param {{ days?: number, endDay?: string }} [opts]
+ */
+function listStudyActivity(opts = {}) {
+  const days = Math.min(400, Math.max(7, Math.floor(Number(opts.days) || 371)));
+  const endKey = opts.endDay ? String(opts.endDay) : dayKeyFromTs();
+  const endParts = endKey.split('-').map(Number);
+  const endDate = new Date(endParts[0], endParts[1] - 1, endParts[2]);
+  if (Number.isNaN(endDate.getTime())) {
+    return listStudyActivity({ days, endDay: dayKeyFromTs() });
+  }
+
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - (days - 1));
+  const startKey = dayKeyFromTs(startDate.getTime());
+
+  const rows = getDb()
+    .prepare(
+      `SELECT day, study_ms AS studyMs, switch_count AS switchCount,
+              distract_count AS distractCount, updated_at AS updatedAt
+       FROM study_days
+       WHERE day >= ? AND day <= ?
+       ORDER BY day ASC`
+    )
+    .all(startKey, endKey);
+
+  const byDay = new Map();
+  for (const row of rows) {
+    const switchCount = Number(row.switchCount) || 0;
+    const distractCount = Number(row.distractCount) || 0;
+    byDay.set(row.day, {
+      day: row.day,
+      studyMs: Number(row.studyMs) || 0,
+      switchCount,
+      distractCount,
+      interruptCount: switchCount + distractCount,
+      updatedAt: row.updatedAt == null ? null : Number(row.updatedAt),
+    });
+  }
+
+  const out = [];
+  const cursor = new Date(startDate);
+  for (let i = 0; i < days; i += 1) {
+    const key = dayKeyFromTs(cursor.getTime());
+    out.push(
+      byDay.get(key) || {
+        day: key,
+        studyMs: 0,
+        switchCount: 0,
+        distractCount: 0,
+        interruptCount: 0,
+        updatedAt: null,
+      }
+    );
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
 }
 
 function ensureCourseGroupTables(database) {
@@ -125,6 +296,7 @@ function ensureCourseGroupTables(database) {
   `);
   // 旧库可能没有 folder_id：先补列，再建索引
   ensureColumn(database, 'course_group_items', 'folder_id', 'TEXT');
+  ensureColumn(database, 'course_groups', 'mindmap_md', "TEXT NOT NULL DEFAULT ''");
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_course_group_items_folder
       ON course_group_items(group_id, folder_id);
@@ -207,6 +379,7 @@ function rowToCourseGroup(row, { items = [], folders = [] } = {}) {
     title: String(row.title || '').trim() || '未命名课程组',
     topic: String(row.topic || '').trim(),
     meta: parseMetaJson(row.meta_json),
+    mindmapMd: String(row.mindmap_md || ''),
     createdAt: Number(row.created_at) || 0,
     updatedAt: Number(row.updated_at) || 0,
     itemCount: items.length,
@@ -409,6 +582,49 @@ function deleteCourseGroup(id) {
       return database.prepare('DELETE FROM course_groups WHERE id = ?').run(key);
     });
     return { ok: true, deleted: info.changes > 0, id: key };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+}
+
+function getCourseMindmap(groupId) {
+  const key = String(groupId || '').trim();
+  if (!key) return { ok: false, error: 'no_id' };
+  const group = getCourseGroup(key);
+  if (!group) return { ok: false, error: 'not_found' };
+  return {
+    ok: true,
+    groupId: key,
+    title: group.title,
+    topic: group.topic,
+    mindmapMd: String(group.mindmapMd || ''),
+    updatedAt: group.updatedAt,
+    itemCount: group.itemCount,
+    bvids: (group.items || []).map((i) => i.bvid),
+  };
+}
+
+function saveCourseMindmap(groupId, mindmapMd) {
+  const key = String(groupId || '').trim();
+  if (!key) return { ok: false, error: 'no_id' };
+  try {
+    const database = getDb();
+    const existing = database
+      .prepare('SELECT id FROM course_groups WHERE id = ?')
+      .get(key);
+    if (!existing) return { ok: false, error: 'not_found' };
+    const md = String(mindmapMd || '');
+    const now = Date.now();
+    database
+      .prepare(
+        `
+        UPDATE course_groups
+        SET mindmap_md = ?, updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(md, now, key);
+    return getCourseMindmap(key);
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
@@ -960,15 +1176,37 @@ function extractSearchTerms(query) {
   return terms.slice(0, 8);
 }
 
-function searchByLike(database, terms, { bvidKey = null, limit = 5 } = {}) {
-  const lim = Math.max(1, Math.min(20, Number(limit) || 5));
+function normalizeBvidFilter({ bvid = null, bvids = null } = {}) {
+  const out = [];
+  const seen = new Set();
+  const push = (v) => {
+    const s = String(v || '').trim();
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    out.push(s);
+  };
+  if (Array.isArray(bvids)) {
+    for (const v of bvids) push(v);
+  }
+  if (bvid) push(bvid);
+  return out;
+}
+
+function searchByLike(database, terms, { bvidKey = null, bvidKeys = null, limit = 5 } = {}) {
+  const lim = Math.max(1, Math.min(40, Number(limit) || 5));
+  const keys =
+    Array.isArray(bvidKeys) && bvidKeys.length
+      ? bvidKeys
+      : bvidKey
+        ? [bvidKey]
+        : null;
   const results = [];
   const seen = new Set();
   for (const term of terms) {
     const like = `%${String(term).replace(/[%_]/g, '')}%`;
     if (!like || like === '%%') continue;
     let rows;
-    if (bvidKey) {
+    if (keys && keys.length === 1) {
       rows = database
         .prepare(
           `
@@ -979,7 +1217,20 @@ function searchByLike(database, terms, { bvidKey = null, limit = 5 } = {}) {
           LIMIT ?
         `
         )
-        .all(bvidKey, like, like, lim);
+        .all(keys[0], like, like, lim);
+    } else if (keys && keys.length > 1) {
+      const ph = keys.map(() => '?').join(',');
+      rows = database
+        .prepare(
+          `
+          SELECT id, bvid, chunk_index AS chunkIndex, heading, text
+          FROM note_chunks
+          WHERE bvid IN (${ph}) AND (text LIKE ? OR heading LIKE ?)
+          ORDER BY chunk_index
+          LIMIT ?
+        `
+        )
+        .all(...keys, like, like, lim);
     } else {
       rows = database
         .prepare(
@@ -1003,18 +1254,24 @@ function searchByLike(database, terms, { bvidKey = null, limit = 5 } = {}) {
   return results;
 }
 
-function searchNoteChunks(query, { bvid = null, limit = 5 } = {}) {
+function searchNoteChunks(query, { bvid = null, bvids = null, limit = 5 } = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
 
-  const lim = Math.max(1, Math.min(20, Number(limit) || 5));
+  const lim = Math.max(1, Math.min(40, Number(limit) || 5));
   const database = getDb();
-  const bvidKey = bvid ? String(bvid) : null;
+  const keys = normalizeBvidFilter({ bvid, bvids });
+  const bvidKey = keys.length === 1 ? keys[0] : null;
+  const bvidKeys = keys.length > 1 ? keys : null;
   const terms = extractSearchTerms(q);
 
   if (Array.from(q).length < 3) {
     try {
-      return searchByLike(database, terms.length ? terms : [q], { bvidKey, limit: lim });
+      return searchByLike(database, terms.length ? terms : [q], {
+        bvidKey,
+        bvidKeys,
+        limit: lim,
+      });
     } catch (err) {
       console.warn('[bili-pet] searchNoteChunks LIKE failed:', err.message || err);
       return [];
@@ -1044,6 +1301,20 @@ function searchNoteChunks(query, { bvid = null, limit = 5 } = {}) {
           `
           )
           .all(bvidKey, matchExpr, lim);
+      } else if (bvidKeys) {
+        const ph = bvidKeys.map(() => '?').join(',');
+        rows = database
+          .prepare(
+            `
+            SELECT c.id, c.bvid, c.chunk_index AS chunkIndex, c.heading, c.text
+            FROM note_chunks_fts f
+            JOIN note_chunks c ON c.id = f.chunk_id
+            WHERE f.bvid IN (${ph}) AND note_chunks_fts MATCH ?
+            ORDER BY bm25(note_chunks_fts)
+            LIMIT ?
+          `
+          )
+          .all(...bvidKeys, matchExpr, lim);
       } else {
         rows = database
           .prepare(
@@ -1070,12 +1341,65 @@ function searchNoteChunks(query, { bvid = null, limit = 5 } = {}) {
   try {
     return searchByLike(database, terms.length ? terms : [q.slice(0, 12)], {
       bvidKey,
+      bvidKeys,
       limit: lim,
     });
   } catch (err) {
     console.warn('[bili-pet] searchNoteChunks LIKE fallback failed:', err.message || err);
     return [];
   }
+}
+
+/** 按课程组内多个 BV 顺序取样切块（无关键词时的兜底） */
+function listChunksForBvids(bvids, { limit = 40, perBvid = 6 } = {}) {
+  const keys = normalizeBvidFilter({ bvids });
+  if (!keys.length) return [];
+  const lim = Math.max(1, Math.min(80, Number(limit) || 40));
+  const per = Math.max(1, Math.min(20, Number(perBvid) || 6));
+  const database = getDb();
+  const stmt = database.prepare(
+    `
+    SELECT id, bvid, chunk_index AS chunkIndex, heading, text
+    FROM note_chunks
+    WHERE bvid = ?
+    ORDER BY chunk_index
+    LIMIT ?
+  `
+  );
+  const results = [];
+  for (const bv of keys) {
+    for (const row of stmt.all(bv, per)) {
+      results.push(row);
+      if (results.length >= lim) return results;
+    }
+  }
+  return results;
+}
+
+function gatherCourseChunks(groupId, { limit = 36 } = {}) {
+  const group = getCourseGroup(groupId);
+  if (!group) return { ok: false, error: 'not_found', group: null, chunks: [] };
+  const bvids = (group.items || []).map((i) => i.bvid).filter(Boolean);
+  if (!bvids.length) {
+    return { ok: false, error: 'no_items', group, chunks: [] };
+  }
+
+  const lim = Math.max(6, Math.min(40, Number(limit) || 36));
+  const query = [group.title, group.topic].filter(Boolean).join(' ').trim() || group.title;
+  let chunks = query ? searchNoteChunks(query, { bvids, limit: lim }) : [];
+  if (chunks.length < Math.min(8, lim)) {
+    const seen = new Set(chunks.map((c) => c.id));
+    for (const row of listChunksForBvids(bvids, { limit: lim, perBvid: 8 })) {
+      if (seen.has(row.id)) continue;
+      chunks.push(row);
+      seen.add(row.id);
+      if (chunks.length >= lim) break;
+    }
+  }
+  if (!chunks.length) {
+    return { ok: false, error: 'no_chunks', group, chunks: [] };
+  }
+  return { ok: true, group, chunks };
 }
 
 function backfillBodyMd(database) {//填充笔记内容
@@ -1399,10 +1723,20 @@ module.exports = {
   createCourseGroup,
   updateCourseGroup,
   deleteCourseGroup,
+  getCourseMindmap,
+  saveCourseMindmap,
+  gatherCourseChunks,
+  listChunksForBvids,
   createCourseFolder,
   updateCourseFolder,
   deleteCourseFolder,
   addCourseGroupItem,
   updateCourseGroupItem,
   removeCourseGroupItem,
+  dayKeyFromTs,
+  addStudyMs,
+  addSwitchCount,
+  addDistractCount,
+  getStudyDay,
+  listStudyActivity,
 };

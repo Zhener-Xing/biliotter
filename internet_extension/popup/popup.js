@@ -48,6 +48,19 @@ function render(state, settings) {
     bridge.className = `muted ${state.bridgeOnline ? 'online' : 'offline'}`;
   }
 
+  const accountEl = document.getElementById('account-status');
+  if (accountEl) {
+    const acc = state.biliAccount || {};
+    if (acc.loggedIn && acc.uid) {
+      accountEl.textContent = `B 站账号：已登录 · UID ${acc.uid}（自动同步桌面宠）`;
+      accountEl.className = 'muted online';
+    } else {
+      accountEl.textContent =
+        'B 站账号：未检测到登录 Cookie。请确认本 Chrome 已登录 B 站，或点下方「重新同步账号」';
+      accountEl.className = 'muted offline';
+    }
+  }
+
   document.getElementById('recordingEnabled').checked = settings.recordingEnabled !== false;
   document.getElementById('realtimePush').checked = settings.realtimePush !== false;
 
@@ -148,6 +161,27 @@ document.getElementById('realtimePush').addEventListener('change', (e) => {
 });
 
 document.getElementById('refresh').addEventListener('click', refresh);
+
+document.getElementById('sync-account')?.addEventListener('click', async () => {
+  const accountEl = document.getElementById('account-status');
+  if (accountEl) {
+    accountEl.textContent = 'B 站账号：正在同步…';
+    accountEl.className = 'muted';
+  }
+  const res = await chrome.runtime.sendMessage({ type: 'BILI_PET_SYNC_ACCOUNT' });
+  if (res?.ok && res.account?.uid) {
+    if (accountEl) {
+      accountEl.textContent = `B 站账号：已登录 · UID ${res.account.uid}（已推送桌面宠）`;
+      accountEl.className = 'muted online';
+    }
+  } else {
+    if (accountEl) {
+      accountEl.textContent =
+        '仍未识别登录。请先打开任意 bilibili.com 标签页并保持登录，再点「重新同步账号」（需允许扩展新权限）';
+      accountEl.className = 'muted offline';
+    }
+  }
+});
 
 document.getElementById('clear').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'BILI_PET_CLEAR' });

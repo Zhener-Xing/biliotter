@@ -103,14 +103,26 @@ const BiliActions = (() => {
       if (/\/video\/BV/i.test(prev)) leave('route_change');
     }, 500);
 
-    /** 视频播放中滑动页面 = 走神 */
+    /** 视频播放中明显滑动页面 = 走神（不用 wheel：B 站调音量会误触） */
     const SCROLL_DEBOUNCE_MS = 4000;
+    const SCROLL_MIN_DELTA_PX = 120;
+    const SCROLL_GRACE_MS = 2500;
+    const watchStartedAt = Date.now();
     let lastScrollEmit = 0;
+    let lastScrollY = window.scrollY || 0;
     const onScrollDistract = () => {
       if (!/\/video\/BV/i.test(location.pathname)) return;
       if (document.visibilityState !== 'visible') return;
+      if (Date.now() - watchStartedAt < SCROLL_GRACE_MS) {
+        lastScrollY = window.scrollY || 0;
+        return;
+      }
       const ctx = typeof getContext === 'function' ? getContext() : {};
-      if (ctx.paused) return;
+      if (ctx.hasVideo === false || ctx.paused) return;
+      const y = window.scrollY || 0;
+      const delta = Math.abs(y - lastScrollY);
+      lastScrollY = y;
+      if (delta < SCROLL_MIN_DELTA_PX) return;
       const now = Date.now();
       if (now - lastScrollEmit < SCROLL_DEBOUNCE_MS) return;
       lastScrollEmit = now;
@@ -125,7 +137,6 @@ const BiliActions = (() => {
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
     window.addEventListener('scroll', onScrollDistract, { passive: true, capture: true });
-    window.addEventListener('wheel', onScrollDistract, { passive: true, capture: true });
 
     return () => {
       clearInterval(urlTimer);
@@ -133,7 +144,6 @@ const BiliActions = (() => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('scroll', onScrollDistract, { capture: true });
-      window.removeEventListener('wheel', onScrollDistract, { capture: true });
     };
   }
 

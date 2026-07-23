@@ -19,8 +19,15 @@ contextBridge.exposeInMainWorld('biliPet', {
   openChatPage() {
     return ipcRenderer.invoke('pet:openChatPage');
   },
-  goHome() {
-    return ipcRenderer.invoke('pet:goHome');
+  goHome(opts) {
+    return ipcRenderer.invoke('pet:goHome', opts || {});
+  },
+  /** 主进程通知知识库打开指定笔记 */
+  onOpenHomeNote(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('pet:openHomeNote', handler);
+    return () => ipcRenderer.removeListener('pet:openHomeNote', handler);
   },
   chat(messages) {
     return ipcRenderer.invoke('pet:chat', { messages });

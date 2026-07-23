@@ -1,11 +1,13 @@
 const chat = require('./chat');
 const notesCollab = require('./notes_collab');
 const courseAction = require('./course_action');
+const mindmapCourse = require('./mindmap_course');
 
 const PROMPTS = {
   [chat.id]: chat,
   [notesCollab.id]: notesCollab,
   [courseAction.id]: courseAction,
+  [mindmapCourse.id]: mindmapCourse,
 };
 
 function getSystemPrompt(taskId, opts = {}) {

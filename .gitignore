@@ -7,6 +7,7 @@ node_modules/
 .bili-pet-notes.db
 .bili-pet-notes.db-wal
 .bili-pet-notes.db-shm
+.bili-pet-account.json
 notes-assets/
 .DS_Store
 *.log

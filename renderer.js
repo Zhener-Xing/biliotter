@@ -140,6 +140,22 @@ function playPointOnce() {
   }, FRAME_MS);
 }
 
+let lastQuestionAt = 0;
+const QUESTION_COOLDOWN_MS = 4500;
+function playQuestionOnce() {
+  const now = Date.now();
+  if (sequencePlaying || now - lastQuestionAt < QUESTION_COOLDOWN_MS) return;
+  lastQuestionAt = now;
+  playSfx('assets/noise/distrcted.mp3');
+  playSequence(ANIM.question, 2);
+}
+
+/** 退出视频 / session_end：annoyed 一轮 + go-off 音效 */
+function playAnnoyedOnce() {
+  playSfx('assets/noise/go-off.mp3');
+  playSequence(ANIM.annoyed, 1);
+}
+
 async function openNotesPage() {
   await window.biliPet?.openNotesPage?.();
 }
@@ -192,11 +208,11 @@ function handleEvent(payload) {
 
       if (breakType === 'ui_scroll' || reason === 'scroll') {
         // 视频播放中滑动界面：question 序列播两轮
-        playSequence(ANIM.question, 2);
+        playQuestionOnce();
       } else if (EXIT_VIDEO_REASONS.has(reason) || breakType === 'exit_video') {
         // 退出视频：annoyed 序列播一轮
         setWatching(false);
-        playSequence(ANIM.annoyed, 1);
+        playAnnoyedOnce();
       }
 
       petSprite?.classList.add('pet-alert');
@@ -210,7 +226,30 @@ function handleEvent(payload) {
 
     case 'session_end':
       setWatching(false);
-      playSequence(ANIM.annoyed, 1);
+      playAnnoyedOnce();
+      break;
+
+    case 'account_hello':
+    case 'account_login': {
+      if (payload.ok === false || payload.bindStatus === 'mismatch') {
+        setWatching(false);
+        // 未登录静默；仅换号冲突提醒一次
+        if (payload.bindStatus === 'mismatch') playQuestionOnce();
+        break;
+      }
+      // 登录 / 自动绑定成功：轻点头示意
+      playPointOnce();
+      break;
+    }
+
+    case 'account_logout':
+      setWatching(false);
+      break;
+
+    case 'account_mismatch':
+      setWatching(false);
+      // logged_out 不播 distraction；换号才提醒
+      if (payload.status === 'mismatch') playQuestionOnce();
       break;
 
     default:
@@ -218,7 +257,6 @@ function handleEvent(payload) {
   }
 }
 
-/** 在 no-drag 上自实现拖窗，这样 hover / 点击 / 拖动都能用 */
 const DRAG_THRESHOLD = 4;
 let dragState = null;
 

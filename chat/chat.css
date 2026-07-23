@@ -126,6 +126,26 @@ body {
   color: #3b2a1f;
 }
 
+.chat-bv-link {
+  appearance: none;
+  display: inline;
+  margin: 0 1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8f5e32;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.chat-bv-link:hover {
+  color: #b0483a;
+}
+
 .chat-msg.system {
   align-self: center;
   background: transparent;

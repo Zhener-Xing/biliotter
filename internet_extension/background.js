@@ -57,8 +57,168 @@ function isHighPriority(payload) {
     payload?.kind === 'focus_break' ||
     payload?.kind === 'session_start' ||
     payload?.kind === 'session_end' ||
-    payload?.kind === 'focus_resume'
+    payload?.kind === 'focus_resume' ||
+    payload?.kind === 'account_login' ||
+    payload?.kind === 'account_logout' ||
+    payload?.kind === 'account_hello'
   );
+}
+
+/** @type {string | null | undefined} undefined=未初始化 */
+let lastKnownUid = undefined;
+
+function normalizeCookieUid(value) {
+  const uid = String(value ?? '').trim();
+  if (!uid || uid === '0') return null;
+  return uid;
+}
+
+/**
+ * 从多个域名 / getAll 读取 DedeUserID。
+ * 单点 chrome.cookies.get(www) 在部分 Cookie Domain 形态下会漏读。
+ */
+async function getBiliAccountFromCookies() {
+  try {
+    const fromList = await chrome.cookies.getAll({ name: 'DedeUserID' });
+    for (const c of fromList || []) {
+      if (!String(c.domain || '').includes('bilibili.com')) continue;
+      const uid = normalizeCookieUid(c.value);
+      if (uid) return { uid, loggedIn: true, source: 'cookie-getAll' };
+    }
+
+    const urls = [
+      'https://www.bilibili.com',
+      'https://bilibili.com',
+      'https://m.bilibili.com',
+      'https://passport.bilibili.com',
+      'https://account.bilibili.com',
+      'https://space.bilibili.com',
+    ];
+    for (const url of urls) {
+      try {
+        const c = await chrome.cookies.get({ url, name: 'DedeUserID' });
+        const uid = normalizeCookieUid(c?.value);
+        if (uid) return { uid, loggedIn: true, source: `cookie-get:${url}` };
+      } catch (_) {
+        /* 无该 host 权限时忽略 */
+      }
+    }
+
+    return { uid: null, loggedIn: false, source: 'none' };
+  } catch (err) {
+    console.warn('[bili-pet] getBiliAccountFromCookies failed', err);
+    return { uid: null, loggedIn: false, source: 'error' };
+  }
+}
+
+/** 在已打开的 B 站标签里执行探测（可读页面 Cookie，或带登录态请求 nav） */
+async function probeUidFromBiliTabs() {
+  if (!chrome.scripting?.executeScript) return null;
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({
+      url: ['*://*.bilibili.com/*', '*://bilibili.com/*'],
+    });
+  } catch (err) {
+    console.warn('[bili-pet] tabs.query failed', err);
+    return null;
+  }
+
+  // 当前窗口活动标签优先
+  tabs.sort((a, b) => Number(b.active) - Number(a.active));
+
+  for (const tab of tabs) {
+    if (!tab?.id || tab.discarded) continue;
+    try {
+      const injected = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async () => {
+          const pick = (v) => {
+            const s = String(v ?? '').trim();
+            return s && s !== '0' ? s : null;
+          };
+          try {
+            const m = document.cookie.match(/(?:^|;\s*)DedeUserID=([^;]+)/);
+            const fromCookie = pick(m?.[1]);
+            if (fromCookie) return { uid: fromCookie, via: 'document.cookie' };
+          } catch (_) {}
+          try {
+            const res = await fetch('https://api.bilibili.com/x/web-interface/nav', {
+              credentials: 'include',
+              cache: 'no-store',
+            });
+            const data = await res.json();
+            const mid = pick(data?.data?.mid);
+            if (mid) return { uid: mid, via: 'nav-api' };
+            return { uid: null, via: 'nav-api', code: data?.code ?? null };
+          } catch (err) {
+            return { uid: null, via: 'nav-error', error: String(err?.message || err) };
+          }
+        },
+      });
+      const result = injected?.[0]?.result;
+      const uid = normalizeCookieUid(result?.uid);
+      if (uid) {
+        return { uid, loggedIn: true, source: `tab-${result?.via || 'probe'}` };
+      }
+    } catch (err) {
+      // 受限页 / 无权限注入
+      console.warn('[bili-pet] tab probe failed', tab.id, err?.message || err);
+    }
+  }
+  return null;
+}
+
+async function getBiliAccount() {
+  const fromCookie = await getBiliAccountFromCookies();
+  if (fromCookie.uid) return fromCookie;
+
+  const fromTab = await probeUidFromBiliTabs();
+  if (fromTab?.uid) {
+    try {
+      await chrome.storage.local.set({
+        biliAccountCache: { uid: fromTab.uid, at: Date.now(), source: fromTab.source },
+      });
+    } catch (_) {}
+    return fromTab;
+  }
+
+  try {
+    const { biliAccountCache } = await chrome.storage.local.get('biliAccountCache');
+    const cachedUid = normalizeCookieUid(biliAccountCache?.uid);
+    // 缓存仅作短时兜底（10 分钟），避免永久错绑
+    if (
+      cachedUid &&
+      Number(biliAccountCache?.at) &&
+      Date.now() - Number(biliAccountCache.at) < 10 * 60 * 1000
+    ) {
+      return { uid: cachedUid, loggedIn: true, source: 'cache' };
+    }
+  } catch (_) {}
+
+  return { uid: null, loggedIn: false, source: fromCookie.source || 'none' };
+}
+
+async function attachAccount(payload) {
+  const existingUid = normalizeCookieUid(payload?.account?.uid);
+  // 已有有效 uid 才跳过；uid:null 的旧信封必须重新读 Cookie
+  if (existingUid) {
+    return {
+      ...payload,
+      account: {
+        uid: existingUid,
+        loggedIn: true,
+      },
+    };
+  }
+  const account = await getBiliAccount();
+  return {
+    ...payload,
+    account: {
+      uid: account.uid,
+      loggedIn: account.loggedIn,
+    },
+  };
 }
 
 async function bridgeToPet(payload, settings) {
@@ -68,10 +228,11 @@ async function bridgeToPet(payload, settings) {
   }
 
   try {
+    const body = await attachAccount(payload);
     const res = await fetch(cfg.BRIDGE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body),
     });
     const online = res.ok;
     await writeState({ bridgeOnline: online });
@@ -80,6 +241,77 @@ async function bridgeToPet(payload, settings) {
     await writeState({ bridgeOnline: false });
     return false;
   }
+}
+
+async function pushAccountEvent(kind, account) {
+  const settings = await getSettings();
+  const payload = {
+    v: cfg.SCHEMA_VERSION,
+    source: cfg.SOURCE,
+    kind,
+    ts: Date.now(),
+    priority: 'high',
+    account: {
+      uid: account?.uid ?? null,
+      loggedIn: Boolean(account?.loggedIn),
+    },
+  };
+  await writeState({
+    biliAccount: {
+      uid: account?.uid ?? null,
+      loggedIn: Boolean(account?.loggedIn),
+      updatedAt: payload.ts,
+    },
+  });
+  await pushRealtime(payload, settings);
+}
+
+/**
+ * 根据 Cookie 同步桌面宠登录态。
+ * - 首次看到 UID → account_hello / account_login（自动登录）
+ * - UID 消失 → account_logout
+ * - 换号 → account_login（新 UID；桌面端硬绑定会拒绝）
+ * @param {{ force?: boolean, hintUid?: string | null }} [opts]
+ */
+async function syncAccountFromCookies(opts = {}) {
+  const force = Boolean(opts.force);
+  let account = await getBiliAccount();
+  // 页面侧提示的 uid（Cookie API 偶发漏读时兜底）
+  const hintUid = normalizeCookieUid(opts.hintUid);
+  if (!account.uid && hintUid) {
+    account = { uid: hintUid, loggedIn: true, source: 'page-hint' };
+  }
+  const uid = account.uid;
+  if (!force && lastKnownUid !== undefined && uid === lastKnownUid) {
+    return { ok: Boolean(uid), account };
+  }
+
+  const prev = lastKnownUid;
+  lastKnownUid = uid;
+
+  if (uid) {
+    const kind = prev === undefined || force ? 'account_hello' : 'account_login';
+    await pushAccountEvent(kind, account);
+    return { ok: true, account };
+  }
+
+  // 强制同步失败时不要误推 logout（否则会把已登录用户打成未登录）
+  if (force) {
+    return { ok: false, account: { uid: null, loggedIn: false, source: account.source || 'none' } };
+  }
+
+  // 未登录：启动同步或从已登录变为退出
+  if (prev === undefined || prev) {
+    await pushAccountEvent('account_logout', { uid: null, loggedIn: false });
+  }
+  return { ok: false, account: { uid: null, loggedIn: false, source: account.source || 'none' } };
+}
+
+/** 页面 / popup 上报的 uid 提示（不信任伪造为最终态，仍会与 Cookie 交叉验证） */
+async function ingestPageAccountHint(hintUid) {
+  const uid = normalizeCookieUid(hintUid);
+  if (!uid) return;
+  await syncAccountFromCookies({ hintUid: uid });
 }
 
 async function enqueue(payload) {
@@ -408,9 +640,53 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === 'BILI_PET_GET_STATE') {
-    Promise.all([readState(), getSettings()]).then(([state, settings]) => {
-      sendResponse({ ok: true, state, settings });
-    });
+    Promise.all([readState(), getSettings(), getBiliAccount()]).then(
+      ([state, settings, account]) => {
+        sendResponse({
+          ok: true,
+          state: {
+            ...state,
+            biliAccount: {
+              uid: account.uid,
+              loggedIn: account.loggedIn,
+              source: account.source || null,
+              updatedAt: Date.now(),
+            },
+          },
+          settings,
+        });
+      }
+    );
+    return true;
+  }
+
+  if (message?.type === 'BILI_PET_SYNC_ACCOUNT') {
+    (async () => {
+      const syncResult = await syncAccountFromCookies({
+        force: true,
+        hintUid: message.hintUid || null,
+      });
+      const account = syncResult?.account?.uid
+        ? syncResult.account
+        : await getBiliAccount();
+      return {
+        ok: Boolean(account?.uid),
+        account: {
+          uid: account?.uid || null,
+          loggedIn: Boolean(account?.uid),
+          source: account?.source || null,
+        },
+      };
+    })()
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ ok: false, error: String(err.message || err) }));
+    return true;
+  }
+
+  if (message?.type === 'BILI_PET_ACCOUNT_HINT') {
+    ingestPageAccountHint(message.uid)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err.message || err) }));
     return true;
   }
 
@@ -457,14 +733,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
+chrome.cookies.onChanged.addListener((changeInfo) => {
+  const c = changeInfo?.cookie;
+  if (!c || c.name !== 'DedeUserID') return;
+  if (!String(c.domain || '').includes('bilibili.com')) return;
+  void syncAccountFromCookies();
+});
+
 chrome.alarms.create('bili-pet-flush', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'bili-pet-flush') return;
   const settings = await getSettings();
   await flushQueue(settings);
+  await syncAccountFromCookies();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
   const { settings } = await chrome.storage.local.get('settings');
   if (!settings) await setSettings(DEFAULT_SETTINGS);
+  await syncAccountFromCookies();
 });
+
+chrome.runtime.onStartup?.addListener?.(() => {
+  void syncAccountFromCookies();
+});
+
+// Service worker 冷启动：立刻把当前 B 站登录态同步给桌面宠
+void syncAccountFromCookies();
