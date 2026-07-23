@@ -1,8 +1,5 @@
 /**
- * Service worker：
- * - 会话 / 字幕 / 专注中断落盘（供后续 AI）
- * - 实时推送到桌面宠物，失败则入队重试
- * - 用户可开关采集与推送（面向多用户）
+ * 会话 / 字幕 / 专注中断落盘；实时推送桌面宠物，失败入队重试。
  */
 
 const cfg = {
@@ -228,6 +225,7 @@ async function handlePayload(payload, senderTab = null) {
           transcriptText: payload.transcriptText ?? prev.transcriptText ?? '',
           fullSubtitleText: payload.fullSubtitleText ?? prev.fullSubtitleText ?? null,
           subtitleStatus: payload.subtitleStatus ?? prev.subtitleStatus ?? null,
+          modelInput: payload.modelInput ?? prev.modelInput ?? null,
           updatedAt: payload.ts || Date.now(),
         },
       });
@@ -276,6 +274,7 @@ async function handlePayload(payload, senderTab = null) {
           contextText: payload.contextText || null,
           transcriptText: payload.transcriptText ?? prev.transcriptText ?? '',
           subtitleStatus: payload.subtitleStatus ?? prev.subtitleStatus ?? null,
+          modelInput: payload.modelInput ?? prev.modelInput ?? null,
           updatedAt: payload.ts || Date.now(),
         },
       });
@@ -458,7 +457,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-// 定时冲刷推送队列 + 保活
 chrome.alarms.create('bili-pet-flush', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'bili-pet-flush') return;
@@ -466,7 +464,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await flushQueue(settings);
 });
 
-// 首次安装写入默认设置
 chrome.runtime.onInstalled.addListener(async () => {
   const { settings } = await chrome.storage.local.get('settings');
   if (!settings) await setSettings(DEFAULT_SETTINGS);

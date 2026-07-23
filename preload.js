@@ -13,4 +13,47 @@ contextBridge.exposeInMainWorld('biliPet', {
   moveBy(dx, dy) {
     ipcRenderer.send('pet:moveBy', dx, dy);
   },
+  openNotesPage() {
+    return ipcRenderer.invoke('pet:openNotesPage');
+  },
+  openChatPage() {
+    return ipcRenderer.invoke('pet:openChatPage');
+  },
+  goHome() {
+    return ipcRenderer.invoke('pet:goHome');
+  },
+  chat(messages) {
+    return ipcRenderer.invoke('pet:chat', { messages });
+  },
+  closeWindow() {
+    return ipcRenderer.invoke('pet:closeWindow');
+  },
+  /** 主进程通知：即将关闭，先播退场音效 */
+  onClosing(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const handler = () => callback();
+    ipcRenderer.on('pet:closing', handler);
+    return () => ipcRenderer.removeListener('pet:closing', handler);
+  },
+  closingFinished() {
+    ipcRenderer.send('pet:closing-finished');
+  },
+  notesLoad(bvid) {
+    return ipcRenderer.invoke('pet:notesLoad', { bvid });
+  },
+  notesSave(payload) {
+    return ipcRenderer.invoke('pet:notesSave', payload || {});
+  },
+  notesSaveSync(payload) {
+    return ipcRenderer.sendSync('pet:notesSaveSync', payload || {});
+  },
+  notesOrganize(payload) {
+    return ipcRenderer.invoke('pet:notesOrganize', payload || {});
+  },
+  notesSaveAsset(payload) {
+    return ipcRenderer.invoke('pet:notesSaveAsset', payload || {});
+  },
+  notesAssetDataUrl(src) {
+    return ipcRenderer.invoke('pet:notesAssetDataUrl', { src });
+  },
 });

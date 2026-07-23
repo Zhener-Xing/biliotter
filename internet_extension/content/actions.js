@@ -1,14 +1,9 @@
-/**
- * 专注向行为监控：只关心「离开视频 / 失去专注」
- * 不采集评论内容、不报滑动噪音。
- */
 const BiliActions = (() => {
   const lastSent = new Map();
 
   function emit(type, detail = {}) {
     const cfg = globalThis.BILI_PET_CONFIG || {};
     const debounce = cfg.ACTION_DEBOUNCE_MS ?? 400;
-    // 同一视频短时间多种失焦（blur + tab_hidden）合并为一次
     const key =
       type === 'exit_video'
         ? `exit_video:${detail.bvid || ''}`
@@ -55,11 +50,6 @@ const BiliActions = (() => {
       force: undefined,
     };
   }
-
-  /**
-   * 退出 / 失焦监控
-   * reasons: pagehide | tab_hidden | window_blur | route_change | switch_bvid
-   */
   function watchFocusBreaks(getContext) {
     let leftForHidden = false;
 
@@ -113,15 +103,37 @@ const BiliActions = (() => {
       if (/\/video\/BV/i.test(prev)) leave('route_change');
     }, 500);
 
+    /** 视频播放中滑动页面 = 走神 */
+    const SCROLL_DEBOUNCE_MS = 4000;
+    let lastScrollEmit = 0;
+    const onScrollDistract = () => {
+      if (!/\/video\/BV/i.test(location.pathname)) return;
+      if (document.visibilityState !== 'visible') return;
+      const ctx = typeof getContext === 'function' ? getContext() : {};
+      if (ctx.paused) return;
+      const now = Date.now();
+      if (now - lastScrollEmit < SCROLL_DEBOUNCE_MS) return;
+      lastScrollEmit = now;
+      emit('ui_scroll', {
+        target: 'page',
+        reason: 'scroll',
+        ...ctx,
+      });
+    };
+
     window.addEventListener('pagehide', onPageHide);
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('scroll', onScrollDistract, { passive: true, capture: true });
+    window.addEventListener('wheel', onScrollDistract, { passive: true, capture: true });
 
     return () => {
       clearInterval(urlTimer);
       window.removeEventListener('pagehide', onPageHide);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('scroll', onScrollDistract, { capture: true });
+      window.removeEventListener('wheel', onScrollDistract, { capture: true });
     };
   }
 

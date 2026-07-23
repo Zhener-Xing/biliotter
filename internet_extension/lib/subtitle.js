@@ -1,6 +1,3 @@
-/**
- * B 站字幕：只拉取指定 bvid+cid；校验 AI 字幕 URL / 时长，防止下错文件串台。
- */
 const BiliSubtitle = (() => {
   const cache = new Map();
   let pageFetchChain = Promise.resolve();
@@ -117,7 +114,6 @@ const BiliSubtitle = (() => {
     );
   }
 
-  /** AI 字幕路径通常含 aid+cid；对不上则视为串台文件 */
   function subtitleUrlMatchesVideo(subtitleUrl, aid, cid) {
     const url = absUrl(subtitleUrl);
     if (!url) return false;
@@ -144,7 +140,6 @@ const BiliSubtitle = (() => {
       `https://api.bilibili.com/x/player/v2?bvid=${encodeURIComponent(bvid)}&cid=${cid}`,
       `https://api.bilibili.com/x/player/wbi/v2?bvid=${encodeURIComponent(bvid)}&cid=${cid}`,
     ];
-
     let lastError = null;
     let needLogin = false;
     let best = [];
@@ -209,8 +204,6 @@ const BiliSubtitle = (() => {
 
     const { subtitles, needLogin } = await listSubtitles(bvid, realCid);
     if (!subtitles.length) return empty(needLogin ? 'need_login' : 'empty');
-
-    // 按优先级尝试多条轨道，URL/时长校验失败则换下一条
     const ranked = [];
     const preferred = pickPreferred(subtitles);
     if (preferred) ranked.push(preferred);
@@ -292,15 +285,12 @@ const BiliSubtitle = (() => {
     }
   }
 
-  function clearAllIntercepts() {}
-
   return {
     load,
     atTime,
     windowAround,
     toPlainText,
     clearCache,
-    clearAllIntercepts,
     resolveCid,
     getView,
   };

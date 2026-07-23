@@ -3,24 +3,2447 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bili-pet</title>
+    <title>BiliOtter · 知识库</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;700&family=Fraunces:opsz,wght@9..144,600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&family=ZCOOL+KuaiLe&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      :root {
+        --ink: #3b2a1f;
+        --muted: #7a6352;
+        --paper: #f4ebe0;
+        --paper-2: #e7d7c4;
+        --panel: #fff8f0;
+        --accent: #b07a45;
+        --accent-deep: #8f5e32;
+        --accent-ink: #fff8f0;
+        --danger: #b0483a;
+        --slot: #c9a27a;
+        --slot-empty: #e7d7c4;
+        --line: #3b2a1f;
+        --shadow: 6px 6px 0 #3b2a1f;
+        --shadow-soft: 4px 4px 0 #3b2a1f;
+        --toast-bg: #3b2a1f;
+        --toast-ink: #fff8f0;
+        --rail: #faf4ec;
+        --hit: #f0e0cc;
+        --font-ui: "ZCOOL KuaiLe", "Nunito", "PingFang SC", "Hiragino Sans GB", sans-serif;
+        --font-body: "Nunito", "PingFang SC", "Hiragino Sans GB", sans-serif;
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      html, body { height: 100%; overflow: hidden; }
+
+      body {
+        font-family: var(--font-ui);
+        color: var(--ink);
+        background:
+          repeating-linear-gradient(
+            0deg,
+            transparent,
+            transparent 3px,
+            rgba(59, 42, 31, 0.035) 3px,
+            rgba(59, 42, 31, 0.035) 4px
+          ),
+          linear-gradient(180deg, var(--paper), var(--paper-2));
+        display: grid;
+        place-items: center;
+      }
+
+      .shell {
+        width: min(1100px, calc(100vw - 32px));
+        height: min(720px, calc(100vh - 32px));
+        border: 4px solid var(--line);
+        box-shadow: var(--shadow);
+        background: var(--panel);
+        display: grid;
+        grid-template-columns: minmax(260px, 320px) 1fr;
+        overflow: hidden;
+        image-rendering: pixelated;
+      }
+
+      /* —— 左侧目录 —— */
+      .sidebar {
+        background: var(--rail);
+        border-right: 4px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .brand {
+        padding: 18px 16px 12px;
+        border-bottom: 3px solid var(--line);
+        flex-shrink: 0;
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .brand-text { flex: 1; min-width: 0; }
+
+      .brand h1 {
+        font-size: 28px;
+        line-height: 1.2;
+        letter-spacing: 0.02em;
+        font-weight: 400;
+      }
+
+      .brand h1 span { color: var(--accent); }
+
+      .brand-sub {
+        margin-top: 4px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .btn-close-window {
+        appearance: none;
+        flex-shrink: 0;
+        width: 34px;
+        height: 34px;
+        border: 3px solid var(--line);
+        background: var(--slot);
+        color: var(--accent-ink);
+        font: inherit;
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+        box-shadow: 2px 2px 0 var(--line);
+        display: grid;
+        place-items: center;
+      }
+
+      .btn-close-window:hover {
+        background: var(--danger);
+        color: #fff8f0;
+        transform: translate(-1px, -1px);
+        box-shadow: 3px 3px 0 var(--line);
+      }
+
+      .side-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+        border-bottom: 3px solid var(--line);
+        flex-shrink: 0;
+      }
+
+      .side-tab {
+        appearance: none;
+        border: 0;
+        border-right: 3px solid var(--line);
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 15px;
+        padding: 10px 8px;
+        cursor: pointer;
+      }
+
+      .side-tab:last-child { border-right: 0; }
+
+      .side-tab:hover { background: rgba(59, 42, 31, 0.04); color: var(--ink); }
+
+      .side-tab.active {
+        background: var(--slot);
+        color: var(--accent-ink);
+      }
+
+      .side-panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
+      .side-panel.active { display: flex; }
+
+      .course-actions {
+        padding: 10px 12px 0;
+        flex-shrink: 0;
+      }
+
+      .course-actions .btn { width: 100%; }
+
+      .search-wrap {
+        padding: 12px 12px 8px;
+        flex-shrink: 0;
+      }
+
+      .search-input {
+        width: 100%;
+        border: 3px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        font: inherit;
+        font-size: 15px;
+        padding: 10px 12px;
+        box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.06);
+        outline: none;
+      }
+
+      .search-input:focus {
+        box-shadow: 3px 3px 0 var(--line);
+      }
+
+      .search-input::placeholder { color: var(--muted); }
+
+      .hits {
+        padding: 0 12px 8px;
+        flex-shrink: 0;
+        max-height: 140px;
+        overflow: auto;
+        display: none;
+      }
+
+      .hits.show { display: block; }
+
+      .hits-label {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .hit-item {
+        appearance: none;
+        width: 100%;
+        text-align: left;
+        border: 2px solid var(--line);
+        background: var(--hit);
+        color: var(--ink);
+        font: inherit;
+        font-size: 13px;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        cursor: pointer;
+        box-shadow: 2px 2px 0 var(--line);
+        line-height: 1.45;
+      }
+
+      .hit-item:hover {
+        transform: translate(-1px, -1px);
+        box-shadow: 3px 3px 0 var(--line);
+      }
+
+      .hit-item strong {
+        display: block;
+        font-size: 14px;
+        margin-bottom: 2px;
+      }
+
+      .hit-item span {
+        color: var(--muted);
+        font-family: var(--font-body);
+        font-size: 12px;
+      }
+
+      .list-meta {
+        padding: 4px 14px 8px;
+        font-size: 12px;
+        color: var(--muted);
+        flex-shrink: 0;
+      }
+
+      .note-list {
+        list-style: none;
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+        padding: 0 10px 14px;
+      }
+
+      .note-item {
+        appearance: none;
+        width: 100%;
+        text-align: left;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        color: var(--ink);
+        font: inherit;
+        padding: 12px;
+        margin-bottom: 10px;
+        cursor: pointer;
+        box-shadow: var(--shadow-soft);
+        transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+        opacity: 0;
+        transform: translateY(10px);
+        animation: stagger-in 0.35s ease forwards;
+      }
+
+      .note-item:hover {
+        transform: translate(-2px, -2px);
+        box-shadow: 6px 6px 0 var(--line);
+        background: #f0e4d4;
+      }
+
+      .note-item.active {
+        background: var(--slot);
+        color: var(--accent-ink);
+      }
+
+      .note-item.active .note-sub { color: rgba(255, 248, 240, 0.85); }
+
+      .note-title {
+        font-size: 16px;
+        line-height: 1.35;
+        margin-bottom: 6px;
+        word-break: break-word;
+      }
+
+      .note-sub {
+        font-family: var(--font-body);
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .list-empty {
+        padding: 24px 12px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .course-tree {
+        list-style: none;
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+        padding: 0 10px 14px;
+      }
+
+      .course-node {
+        margin-bottom: 10px;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .course-node.active {
+        background: #f0e4d4;
+      }
+
+      .course-node-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+        padding: 10px;
+        cursor: pointer;
+        width: 100%;
+        text-align: left;
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--ink);
+        font: inherit;
+      }
+
+      .course-node-head:hover { background: rgba(59, 42, 31, 0.04); }
+
+      .course-chevron {
+        flex-shrink: 0;
+        width: 1.1em;
+        font-size: 14px;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .course-node-main { flex: 1; min-width: 0; }
+
+      .course-node-title {
+        font-size: 15px;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+
+      .course-node-sub {
+        font-family: var(--font-body);
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      .course-node-body {
+        border-top: 2px solid var(--line);
+        padding: 8px;
+        background: var(--panel);
+      }
+
+      .course-node-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+
+      .course-node-actions .btn {
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+
+      .folder-node {
+        border: 2px solid var(--line);
+        background: #f7efe4;
+        margin-bottom: 8px;
+      }
+
+      .folder-node-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px;
+        cursor: pointer;
+        width: 100%;
+        text-align: left;
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--ink);
+        font: inherit;
+        font-size: 13px;
+      }
+
+      .folder-node-head:hover { background: rgba(59, 42, 31, 0.04); }
+
+      .folder-node-title { flex: 1; min-width: 0; word-break: break-word; }
+
+      .folder-node-actions {
+        display: flex;
+        gap: 4px;
+        flex-shrink: 0;
+      }
+
+      .folder-node-actions .btn {
+        padding: 2px 6px;
+        font-size: 11px;
+      }
+
+      .folder-node-body {
+        display: none;
+        border-top: 2px solid var(--line);
+        padding: 6px;
+        background: var(--slot-empty);
+      }
+
+      .folder-node.open .folder-node-body { display: block; }
+
+      .tree-note-item {
+        appearance: none;
+        width: 100%;
+        text-align: left;
+        border: 2px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        font: inherit;
+        font-size: 13px;
+        padding: 8px;
+        margin-bottom: 6px;
+        cursor: pointer;
+        box-shadow: 2px 2px 0 var(--line);
+      }
+
+      .tree-note-item:hover {
+        transform: translate(-1px, -1px);
+        box-shadow: 3px 3px 0 var(--line);
+      }
+
+      .tree-note-item.active {
+        background: var(--slot);
+        color: var(--accent-ink);
+      }
+
+      .tree-note-item .tn-title {
+        display: block;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+
+      .tree-note-item .tn-sub {
+        display: block;
+        margin-top: 2px;
+        font-family: var(--font-body);
+        font-size: 11px;
+        opacity: 0.85;
+      }
+
+      .tree-note-item .status-pill {
+        margin-left: 0;
+        margin-top: 4px;
+      }
+
+      .side-add-box {
+        margin-top: 8px;
+        border: 2px dashed var(--line);
+        padding: 8px;
+        background: rgba(255, 248, 240, 0.7);
+      }
+
+      .side-add-box h4 {
+        font-size: 13px;
+        margin-bottom: 8px;
+      }
+
+      .side-add-box .course-form label { font-size: 12px; }
+      .side-add-box .course-form input,
+      .side-add-box .course-form select {
+        font-size: 13px;
+        padding: 7px 8px;
+      }
+
+      .side-create-box {
+        margin: 0 10px 10px;
+        border: 3px solid var(--line);
+        padding: 10px;
+        background: var(--panel);
+        display: none;
+      }
+
+      .side-create-box.show { display: block; }
+
+      .course-item-badge {
+        display: inline-block;
+        margin-top: 4px;
+        font-family: var(--font-body);
+        font-size: 11px;
+        padding: 2px 6px;
+        border: 2px solid var(--line);
+        background: var(--panel);
+        color: var(--muted);
+      }
+
+      .folder-block {
+        display: none;
+      }
+
+      .course-form {
+        display: grid;
+        gap: 10px;
+      }
+
+      .course-form label {
+        display: grid;
+        gap: 6px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .course-form input,
+      .course-form textarea,
+      .course-form select {
+        width: 100%;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        color: var(--ink);
+        font: inherit;
+        font-size: 15px;
+        padding: 10px 12px;
+        outline: none;
+      }
+
+      .course-form textarea {
+        min-height: 72px;
+        resize: vertical;
+        font-family: var(--font-body);
+      }
+
+      .course-form-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .video-list {
+        list-style: none;
+        margin-top: 14px;
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+        padding-right: 2px;
+      }
+
+      .video-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: start;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        padding: 12px;
+        margin-bottom: 10px;
+        box-shadow: var(--shadow-soft);
+      }
+
+      .video-row-main { min-width: 0; }
+
+      .video-row-title {
+        font-size: 16px;
+        line-height: 1.35;
+        word-break: break-word;
+        margin-bottom: 4px;
+      }
+
+      .video-row-sub {
+        font-family: var(--font-body);
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .video-row-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .video-row-actions .btn {
+        padding: 5px 10px;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .course-form-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .add-mode-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border: 3px solid var(--line);
+        overflow: hidden;
+      }
+
+      .add-mode-tab {
+        appearance: none;
+        border: 0;
+        border-right: 3px solid var(--line);
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 14px;
+        padding: 8px 6px;
+        cursor: pointer;
+      }
+
+      .add-mode-tab:last-child { border-right: 0; }
+
+      .add-mode-tab.active {
+        background: var(--slot);
+        color: var(--accent-ink);
+      }
+
+      .add-video-box {
+        margin-top: 14px;
+        border: 3px dashed var(--line);
+        padding: 12px;
+        background: rgba(255, 248, 240, 0.55);
+        flex-shrink: 0;
+      }
+
+      .add-video-box[hidden] {
+        display: none !important;
+      }
+
+      .add-video-box h3 {
+        font-size: 15px;
+        margin-bottom: 10px;
+      }
+
+      .folder-block {
+        border: 3px solid var(--line);
+        background: #f7efe4;
+        margin-bottom: 12px;
+        box-shadow: var(--shadow-soft);
+      }
+
+      .folder-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 10px 12px;
+        border-bottom: 2px solid var(--line);
+        background: var(--slot-empty);
+      }
+
+      .folder-head-title {
+        font-size: 16px;
+        flex: 1;
+        min-width: 120px;
+      }
+
+      .folder-head .btn {
+        padding: 4px 9px;
+        font-size: 12px;
+      }
+
+      .folder-body {
+        padding: 10px 10px 4px;
+      }
+
+      .folder-body .video-row {
+        margin-bottom: 8px;
+      }
+
+      .folder-empty {
+        padding: 8px 4px 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .course-toolbar-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 10px 0 4px;
+      }
+
+      .course-form select {
+        width: 100%;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        color: var(--ink);
+        font: inherit;
+        font-size: 15px;
+        padding: 10px 12px;
+        outline: none;
+      }
+
+      .move-select {
+        max-width: 140px;
+        border: 2px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 6px;
+      }
+
+      .status-pill {
+        display: inline-block;
+        font-family: var(--font-body);
+        font-size: 11px;
+        border: 2px solid var(--line);
+        padding: 1px 6px;
+        margin-left: 6px;
+        vertical-align: middle;
+      }
+
+      .status-pill.noted {
+        background: #d7e8c8;
+        color: #3b2a1f;
+      }
+
+      .status-pill.planned {
+        background: #f0e0cc;
+        color: var(--muted);
+      }
+
+      a.inline-link {
+        color: var(--accent-deep);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      @keyframes stagger-in {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      /* —— 右侧正文 —— */
+      .main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        background: var(--panel);
+      }
+
+      .main-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        border-bottom: 3px solid var(--line);
+        flex-shrink: 0;
+        min-height: 56px;
+      }
+
+      .main-toolbar[hidden] { display: none !important; }
+
+      .btn {
+        appearance: none;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        color: var(--ink);
+        font: inherit;
+        font-size: 14px;
+        padding: 7px 12px;
+        cursor: pointer;
+        box-shadow: 2px 2px 0 var(--line);
+      }
+
+      .btn:hover {
+        transform: translate(-1px, -1px);
+        box-shadow: 3px 3px 0 var(--line);
+      }
+
+      .btn:active {
+        transform: translate(1px, 1px);
+        box-shadow: 1px 1px 0 var(--line);
+      }
+
+      .btn.primary {
+        background: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      .btn.danger {
+        background: var(--danger);
+        color: #fff8f0;
+      }
+
+      .spacer { flex: 1; }
+
+      .pane {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 16px 18px 18px;
+        overflow: hidden;
+      }
+
+      .pane[hidden] { display: none !important; }
+
+      .welcome {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-size: 18px;
+      }
+
+      .doc-meta {
+        font-family: var(--font-body);
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      .doc-heading {
+        font-size: 26px;
+        line-height: 1.3;
+        margin-bottom: 12px;
+        word-break: break-word;
+      }
+
+      .preview-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        padding: 16px 18px;
+        box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.04);
+      }
+
+      .md-body {
+        font-family: var(--font-body);
+        font-size: 15px;
+        line-height: 1.7;
+        color: var(--ink);
+        user-select: text;
+      }
+
+      .md-body h1, .md-body h2, .md-body h3 {
+        font-family: var(--font-ui);
+        color: var(--accent-deep);
+        margin: 0.85em 0 0.4em;
+        line-height: 1.35;
+      }
+
+      .md-body h1 { font-size: 22px; }
+      .md-body h2 { font-size: 18px; }
+      .md-body h3 { font-size: 16px; }
+
+      .md-body p, .md-body ul, .md-body ol { margin: 0 0 0.75em; }
+      .md-body ul, .md-body ol { padding-left: 1.3em; }
+
+      .md-body code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.9em;
+        background: rgba(0, 0, 0, 0.06);
+        border: 1px solid var(--line);
+        padding: 0.05em 0.28em;
+      }
+
+      .md-body pre {
+        background: #2c2118;
+        color: #f4ebe0;
+        border: 3px solid var(--line);
+        padding: 10px 12px;
+        overflow: auto;
+        margin: 0 0 0.8em;
+      }
+
+      .md-body pre code {
+        background: transparent;
+        border: 0;
+        padding: 0;
+        color: inherit;
+      }
+
+      .md-body img {
+        max-width: 100%;
+        border: 3px solid var(--line);
+        box-shadow: 2px 2px 0 var(--line);
+        margin: 0.35em 0 0.7em;
+      }
+
+      .title-input {
+        width: 100%;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        color: var(--ink);
+        font: inherit;
+        font-size: 20px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+        outline: none;
+      }
+
+      .edit-split {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border: 3px solid var(--line);
+        overflow: hidden;
+        background: var(--slot-empty);
+      }
+
+      .body-input {
+        width: 100%;
+        height: 100%;
+        resize: none;
+        border: 0;
+        border-right: 3px solid var(--line);
+        background: transparent;
+        color: var(--ink);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        line-height: 1.55;
+        padding: 12px;
+        outline: none;
+      }
+
+      .edit-preview {
+        height: 100%;
+        overflow: auto;
+        padding: 14px 16px;
+      }
+
+      .save-hint {
+        margin-top: 8px;
+        font-size: 13px;
+        color: var(--muted);
+        min-height: 1.3em;
+      }
+
+      .toast {
+        position: absolute;
+        left: 50%;
+        bottom: 22px;
+        transform: translateX(-50%) translateY(8px);
+        background: var(--toast-bg);
+        color: var(--toast-ink);
+        font-size: 14px;
+        padding: 10px 16px;
+        border: 3px solid var(--line);
+        box-shadow: var(--shadow-soft);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 40;
+        transition: opacity 0.15s ease, transform 0.15s ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      .shell { position: relative; }
+
+      @media (max-width: 820px) {
+        .shell {
+          grid-template-columns: 1fr;
+          grid-template-rows: minmax(220px, 38%) 1fr;
+          height: min(100vh - 16px, 900px);
+        }
+        .sidebar { border-right: 0; border-bottom: 4px solid var(--line); }
+        .edit-split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+        .body-input { border-right: 0; border-bottom: 3px solid var(--line); }
+      }
+    </style>
   </head>
   <body>
-    <main class="panel">
-      <h1 class="brand">bili-pet</h1>
-      <p id="status" class="status" data-state="idle">未运行</p>
-      <div class="actions">
-        <button id="btn-start" type="button" class="btn btn-start">启动</button>
-        <button id="btn-stop" type="button" class="btn btn-stop">终止</button>
-      </div>
-    </main>
-    <script src="/app.js"></script>
+    <div class="shell" id="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-text">
+            <h1>Bili<span>Otter</span></h1>
+            <p class="brand-sub">知识库</p>
+          </div>
+          <button type="button" class="btn-close-window" id="btn-close-window" aria-label="关闭" title="关闭">×</button>
+        </div>
+
+        <div class="side-tabs" role="tablist">
+          <button type="button" class="side-tab active" id="tab-notes" role="tab" aria-selected="true">笔记</button>
+          <button type="button" class="side-tab" id="tab-courses" role="tab" aria-selected="false">课程组</button>
+        </div>
+
+        <div class="side-panel active" id="panel-notes">
+          <div class="search-wrap">
+            <input
+              id="search-input"
+              class="search-input"
+              type="search"
+              placeholder="搜索标题、BV 号或正文…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+
+          <div class="hits" id="hits" aria-live="polite">
+            <div class="hits-label">检索片段</div>
+            <div id="hits-list"></div>
+          </div>
+
+          <div class="list-meta" id="list-count">共 0 条</div>
+          <ul class="note-list" id="note-list"></ul>
+          <p class="list-empty" id="list-empty" hidden>还没有笔记</p>
+        </div>
+
+        <div class="side-panel" id="panel-courses">
+          <div class="course-actions">
+            <button type="button" class="btn primary" id="btn-new-course">＋ 新建课程组</button>
+          </div>
+          <div class="side-create-box" id="side-create-box">
+            <form class="course-form" id="form-create-course" style="margin-top:0">
+              <label>
+                课程组名称
+                <input id="create-course-title" type="text" placeholder="例如：线性代数" required />
+              </label>
+              <div class="course-form-row">
+                <button type="submit" class="btn primary">创建</button>
+                <button type="button" class="btn" id="btn-cancel-create-course">取消</button>
+              </div>
+            </form>
+          </div>
+          <div class="list-meta" id="course-list-count">共 0 个课程组</div>
+          <ul class="course-tree" id="course-list"></ul>
+          <p class="list-empty" id="course-list-empty" hidden>还没有课程组</p>
+        </div>
+      </aside>
+
+      <section class="main">
+        <div class="main-toolbar" id="toolbar-preview" hidden>
+          <button type="button" class="btn" id="btn-close-note">关闭</button>
+          <button type="button" class="btn primary" id="btn-edit">编辑</button>
+          <button type="button" class="btn" id="btn-assign-course">加入课程组</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn danger" id="btn-delete-preview">删除</button>
+        </div>
+
+        <div class="main-toolbar" id="toolbar-edit" hidden>
+          <button type="button" class="btn" id="btn-back-preview">‹ 预览</button>
+          <button type="button" class="btn primary" id="btn-save">保存</button>
+          <button type="button" class="btn" id="btn-assign-course-edit">加入课程组</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn danger" id="btn-delete-edit">删除</button>
+        </div>
+
+        <div class="main-toolbar" id="toolbar-assign" hidden>
+          <button type="button" class="btn" id="btn-cancel-assign">‹ 返回</button>
+          <span class="spacer"></span>
+        </div>
+
+        <div class="pane" id="pane-welcome">
+          <p class="welcome">选择左侧笔记或课程组中的内容</p>
+        </div>
+
+        <div class="pane" id="pane-preview" hidden>
+          <p class="doc-meta" id="preview-meta"></p>
+          <h2 class="doc-heading" id="preview-heading"></h2>
+          <div class="preview-scroll">
+            <div class="md-body" id="preview-body"></div>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-edit" hidden>
+          <p class="doc-meta" id="edit-meta"></p>
+          <input
+            type="text"
+            class="title-input"
+            id="title-input"
+            placeholder="笔记标题"
+            spellcheck="true"
+          />
+          <div class="edit-split">
+            <textarea
+              class="body-input"
+              id="body-input"
+              placeholder="Markdown 正文…"
+              spellcheck="true"
+            ></textarea>
+            <div class="md-body edit-preview" id="edit-preview" aria-label="预览"></div>
+          </div>
+          <p class="save-hint" id="save-hint">修改会自动保存</p>
+        </div>
+
+        <div class="pane" id="pane-assign-course" hidden>
+          <h2 class="doc-heading">加入课程组</h2>
+          <p class="doc-meta" id="assign-note-meta">将当前笔记归入课程组或文件夹。写完或写一半都可以。</p>
+          <form class="course-form" id="form-assign-course">
+            <label>
+              笔记
+              <input id="assign-note-label" type="text" readonly />
+            </label>
+            <label>
+              课程组
+              <select id="assign-course-select" required></select>
+            </label>
+            <label>
+              文件夹
+              <select id="assign-folder-select"></select>
+            </label>
+            <div class="course-form-row">
+              <button type="submit" class="btn primary">确认加入</button>
+              <button type="button" class="btn" id="btn-cancel-assign-form">取消</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+
+    <link rel="stylesheet" href="/notes-vendor/katex.min.css" />
+    <script src="/notes-vendor/marked.min.js"></script>
+    <script src="/notes-vendor/purify.min.js"></script>
+    <script src="/notes-vendor/katex.min.js"></script>
+    <script src="/notes-vendor/auto-render.min.js"></script>
+
+    <script>
+      (function () {
+        const searchInput = document.getElementById("search-input");
+        const hitsEl = document.getElementById("hits");
+        const hitsList = document.getElementById("hits-list");
+        const noteList = document.getElementById("note-list");
+        const listEmpty = document.getElementById("list-empty");
+        const listCount = document.getElementById("list-count");
+        const toastEl = document.getElementById("toast");
+
+        const paneWelcome = document.getElementById("pane-welcome");
+        const panePreview = document.getElementById("pane-preview");
+        const paneEdit = document.getElementById("pane-edit");
+        const paneAssignCourse = document.getElementById("pane-assign-course");
+        const toolbarPreview = document.getElementById("toolbar-preview");
+        const toolbarEdit = document.getElementById("toolbar-edit");
+        const toolbarAssign = document.getElementById("toolbar-assign");
+        const tabNotes = document.getElementById("tab-notes");
+        const tabCourses = document.getElementById("tab-courses");
+        const panelNotes = document.getElementById("panel-notes");
+        const panelCourses = document.getElementById("panel-courses");
+        const courseList = document.getElementById("course-list");
+        const courseListEmpty = document.getElementById("course-list-empty");
+        const courseListCount = document.getElementById("course-list-count");
+        const sideCreateBox = document.getElementById("side-create-box");
+
+        const previewMeta = document.getElementById("preview-meta");
+        const previewHeading = document.getElementById("preview-heading");
+        const previewBody = document.getElementById("preview-body");
+        const editMeta = document.getElementById("edit-meta");
+        const titleInput = document.getElementById("title-input");
+        const bodyInput = document.getElementById("body-input");
+        const editPreview = document.getElementById("edit-preview");
+        const saveHint = document.getElementById("save-hint");
+
+        let allNotes = [];
+        let allCourses = [];
+        /** @type {Record<string, any>} */
+        let courseDetails = {};
+        /** @type {Set<string>} */
+        let expandedCourses = new Set();
+        /** @type {Set<string>} */
+        let expandedFolders = new Set();
+        let activeBvid = null;
+        let activeCourseId = null;
+        let activeCourse = null;
+        let addingCourseId = null;
+        let addVideoMode = "bvid";
+        /** @type {null | { type: string, courseId: string }} */
+        let noteReturnContext = null;
+        let assignReturnMode = "preview";
+        let sideView = "notes";
+        let mode = "welcome";
+        let dirty = false;
+        let saveTimer = null;
+        let previewTimer = null;
+        let mathTimer = null;
+        const PREVIEW_DEBOUNCE_MS = 160;
+        let searchTimer = null;
+        let toastTimer = null;
+
+        function showToast(message) {
+          toastEl.textContent = message;
+          toastEl.classList.remove("show");
+          void toastEl.offsetWidth;
+          toastEl.classList.add("show");
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(function () {
+            toastEl.classList.remove("show");
+          }, 1800);
+        }
+
+        async function api(path, method, body) {
+          method = method || "GET";
+          const hasBody = method === "POST" || method === "PUT";
+          const res = await fetch(path, {
+            method: method,
+            headers: hasBody ? { "Content-Type": "application/json" } : undefined,
+            body: hasBody ? JSON.stringify(body == null ? {} : body) : undefined,
+          });
+          const data = await res.json().catch(function () { return {}; });
+          if (!res.ok || data.ok === false) {
+            throw new Error(data.message || "请求失败 (" + res.status + ")");
+          }
+          return data;
+        }
+
+        function formatTime(ts) {
+          const n = Number(ts) || 0;
+          if (!n) return "未知时间";
+          try {
+            return new Date(n).toLocaleString();
+          } catch (_) {
+            return String(n);
+          }
+        }
+
+        function rewriteNoteAssetUrls(md) {
+          return String(md || "")
+            .replace(
+              /bilinotes:\/\/asset\/([^/\s)]+)\/([^)\s]+)/g,
+              function (_m, bvid, file) {
+                return (
+                  "/api/notes-assets/" +
+                  encodeURIComponent(decodeURIComponent(bvid)) +
+                  "/" +
+                  encodeURIComponent(decodeURIComponent(file))
+                );
+              }
+            )
+            .replace(
+              /\]\(file:\/\/[^)\s]*\/notes-assets\/([^)\s]+)\)/g,
+              function (_m, rel) {
+                const parts = String(rel).split("/").filter(Boolean);
+                if (parts.length < 2) return _m;
+                return (
+                  "](/api/notes-assets/" +
+                  encodeURIComponent(decodeURIComponent(parts[0])) +
+                  "/" +
+                  encodeURIComponent(decodeURIComponent(parts.slice(1).join("/"))) +
+                  ")"
+                );
+              }
+            );
+        }
+
+        function renderMarkdownInto(el, md, opts) {
+          if (!el) return;
+          const withMath = !opts || opts.withMath !== false;
+          const source = rewriteNoteAssetUrls(md);
+          clearTimeout(mathTimer);
+          mathTimer = null;
+          try {
+            if (window.marked && window.marked.parse) {
+              const raw = window.marked.parse(source, { gfm: true, breaks: true });
+              el.innerHTML =
+                window.DOMPurify && window.DOMPurify.sanitize
+                  ? window.DOMPurify.sanitize(raw, {
+                      USE_PROFILES: { html: true },
+                      ADD_TAGS: ["img"],
+                      ADD_ATTR: ["src", "alt", "title"],
+                      ALLOWED_URI_REGEXP:
+                        /^(?:(?:(?:f|ht)tps?|mailto|tel|data):|\/api\/notes-assets\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
+                    })
+                  : raw;
+            } else {
+              el.textContent = source;
+            }
+            if (!withMath || !window.renderMathInElement) return;
+            mathTimer = setTimeout(function () {
+              mathTimer = null;
+              if (!el.isConnected) return;
+              window.renderMathInElement(el, {
+                delimiters: [
+                  { left: "$$", right: "$$", display: true },
+                  { left: "$", right: "$", display: false },
+                  { left: "\\(", right: "\\)", display: false },
+                  { left: "\\[", right: "\\]", display: true },
+                ],
+                throwOnError: false,
+              });
+            }, 0);
+          } catch (err) {
+            el.textContent = source;
+            console.warn("[notes] render failed", err);
+          }
+        }
+
+        function scheduleEditPreview() {
+          clearTimeout(previewTimer);
+          previewTimer = setTimeout(function () {
+            previewTimer = null;
+            renderMarkdownInto(editPreview, bodyInput.value);
+          }, PREVIEW_DEBOUNCE_MS);
+        }
+
+        function setMode(next) {
+          mode = next;
+          paneWelcome.hidden = next !== "welcome";
+          panePreview.hidden = next !== "preview";
+          paneEdit.hidden = next !== "edit";
+          paneAssignCourse.hidden = next !== "assign-course";
+          toolbarPreview.hidden = next !== "preview";
+          toolbarEdit.hidden = next !== "edit";
+          toolbarAssign.hidden = next !== "assign-course";
+        }
+
+        function setSideView(view) {
+          sideView = view === "courses" ? "courses" : "notes";
+          tabNotes.classList.toggle("active", sideView === "notes");
+          tabCourses.classList.toggle("active", sideView === "courses");
+          tabNotes.setAttribute("aria-selected", sideView === "notes" ? "true" : "false");
+          tabCourses.setAttribute("aria-selected", sideView === "courses" ? "true" : "false");
+          panelNotes.classList.toggle("active", sideView === "notes");
+          panelCourses.classList.toggle("active", sideView === "courses");
+        }
+
+        function renderList(notes) {
+          noteList.innerHTML = "";
+          listCount.textContent = "共 " + notes.length + " 条";
+          listEmpty.hidden = notes.length > 0;
+
+          notes.forEach(function (item, index) {
+            const li = document.createElement("li");
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "note-item" + (item.bvid === activeBvid ? " active" : "");
+            btn.style.animationDelay = Math.min(index, 12) * 0.04 + "s";
+            btn.innerHTML =
+              '<div class="note-title"></div><div class="note-sub"></div>';
+            btn.querySelector(".note-title").textContent = item.title || item.bvid || "未命名";
+            btn.querySelector(".note-sub").textContent =
+              (item.bvid || "") + " · " + formatTime(item.updatedAt);
+            btn.addEventListener("click", function () {
+              openPreview(item.bvid);
+            });
+            li.appendChild(btn);
+            noteList.appendChild(li);
+          });
+        }
+
+        function folderKey(courseId, folderId) {
+          return String(courseId) + "::" + String(folderId || "root");
+        }
+
+        function fillFolderSelect(selectEl, folders, selectedId) {
+          if (!selectEl) return;
+          const list = Array.isArray(folders) ? folders : [];
+          const current = selectedId == null ? "root" : String(selectedId);
+          selectEl.innerHTML = "";
+          const rootOpt = document.createElement("option");
+          rootOpt.value = "root";
+          rootOpt.textContent = "未分类（根目录）";
+          selectEl.appendChild(rootOpt);
+          list.forEach(function (folder) {
+            const opt = document.createElement("option");
+            opt.value = folder.id;
+            opt.textContent = folder.title || "未命名文件夹";
+            selectEl.appendChild(opt);
+          });
+          selectEl.value = current;
+          if (selectEl.value !== current) selectEl.value = "root";
+        }
+
+        function fillNoteSelect(selectEl, preferredBvid) {
+          if (!selectEl) return;
+          const preferred = preferredBvid || selectEl.value || "";
+          selectEl.innerHTML = "";
+          if (!allNotes.length) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "笔记库为空";
+            selectEl.appendChild(opt);
+            return;
+          }
+          const placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.textContent = "选择一条笔记…";
+          selectEl.appendChild(placeholder);
+          allNotes.forEach(function (note) {
+            const opt = document.createElement("option");
+            opt.value = note.bvid;
+            const mark = Number(note.bodyLen) > 0 ? "" : "（空）";
+            opt.textContent =
+              (note.title || note.bvid || "未命名") +
+              " · " +
+              (note.bvid || "") +
+              mark;
+            selectEl.appendChild(opt);
+          });
+          if (preferred) selectEl.value = preferred;
+        }
+
+        function setAddVideoMode(next, rootEl) {
+          addVideoMode = next === "note" ? "note" : "bvid";
+          const scope = rootEl || document;
+          const bvidFields = scope.querySelector("#add-fields-bvid");
+          const noteFields = scope.querySelector("#add-fields-note");
+          if (bvidFields) bvidFields.hidden = addVideoMode !== "bvid";
+          if (noteFields) noteFields.hidden = addVideoMode !== "note";
+          scope.querySelector("#add-mode-bvid")?.classList.toggle("active", addVideoMode === "bvid");
+          scope.querySelector("#add-mode-note")?.classList.toggle("active", addVideoMode === "note");
+          if (addVideoMode === "note") fillNoteSelect(scope.querySelector("#add-video-note"));
+        }
+
+        function buildAddBox(courseId, folders) {
+          const box = document.createElement("div");
+          box.className = "side-add-box";
+          box.innerHTML =
+            "<h4>添加视频 / 笔记</h4>" +
+            '<div class="add-mode-tabs" role="tablist">' +
+            '<button type="button" class="add-mode-tab active" id="add-mode-bvid">粘贴 BV</button>' +
+            '<button type="button" class="add-mode-tab" id="add-mode-note">从笔记库选择</button>' +
+            "</div>" +
+            '<form class="course-form" id="form-add-video" style="margin-top:8px">' +
+            '<div id="add-fields-bvid">' +
+            "<label>BV 号或链接<input id=\"add-video-bvid\" type=\"text\" placeholder=\"BV… 或视频链接\" /></label>" +
+            "<label>显示标题（可选）<input id=\"add-video-title\" type=\"text\" placeholder=\"不填则显示 BV 号\" /></label>" +
+            "</div>" +
+            '<div id="add-fields-note" hidden>' +
+            "<label>选择已有笔记<select id=\"add-video-note\"></select></label>" +
+            "</div>" +
+            "<label>放到文件夹<select id=\"add-video-folder\"></select></label>" +
+            '<div class="course-form-row">' +
+            '<button type="submit" class="btn primary">加入</button>' +
+            '<button type="button" class="btn" id="btn-collapse-add-video">收起</button>' +
+            "</div></form>";
+
+          fillFolderSelect(box.querySelector("#add-video-folder"), folders, "root");
+          fillNoteSelect(box.querySelector("#add-video-note"));
+          setAddVideoMode("bvid", box);
+
+          box.querySelector("#add-mode-bvid").addEventListener("click", function () {
+            setAddVideoMode("bvid", box);
+          });
+          box.querySelector("#add-mode-note").addEventListener("click", function () {
+            setAddVideoMode("note", box);
+          });
+          box.querySelector("#btn-collapse-add-video").addEventListener("click", function () {
+            addingCourseId = null;
+            renderCourseTree();
+          });
+          box.querySelector("#form-add-video").addEventListener("submit", function (e) {
+            addVideoToCourse(e, courseId, box);
+          });
+          return box;
+        }
+
+        function buildTreeNoteItem(item, courseId, folders) {
+          const wrap = document.createElement("div");
+          wrap.style.marginBottom = "6px";
+
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className =
+            "tree-note-item" + (item.bvid === activeBvid ? " active" : "");
+          btn.style.marginBottom = "4px";
+
+          const title = document.createElement("span");
+          title.className = "tn-title";
+          title.textContent = item.title || item.bvid;
+
+          const pill = document.createElement("span");
+          pill.className = "status-pill " + (item.hasNote ? "noted" : "planned");
+          pill.textContent = item.hasNote ? "已有笔记" : "待学习";
+
+          const sub = document.createElement("span");
+          sub.className = "tn-sub";
+          sub.textContent = item.bvid || "";
+
+          btn.appendChild(title);
+          btn.appendChild(pill);
+          btn.appendChild(sub);
+
+          btn.addEventListener("click", function () {
+            if (item.hasNote) {
+              openPreview(item.bvid, { fromCourseId: courseId });
+            } else {
+              const url = item.url || "https://www.bilibili.com/video/" + item.bvid;
+              window.open(url, "_blank", "noopener,noreferrer");
+              showToast("还没有笔记，已打开 B 站");
+            }
+          });
+
+          const row = document.createElement("div");
+          row.className = "course-form-row";
+          row.style.gap = "4px";
+
+          const moveSelect = document.createElement("select");
+          moveSelect.className = "move-select";
+          moveSelect.title = "移动到文件夹";
+          fillFolderSelect(moveSelect, folders, item.folderId || "root");
+          moveSelect.addEventListener("click", function (e) { e.stopPropagation(); });
+          moveSelect.addEventListener("change", function () {
+            moveVideoToFolder(item.bvid, moveSelect.value, courseId);
+          });
+
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "btn";
+          removeBtn.textContent = "移出";
+          removeBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            removeVideoFromCourse(item.bvid, courseId);
+          });
+
+          row.appendChild(moveSelect);
+          row.appendChild(removeBtn);
+
+          wrap.appendChild(btn);
+          wrap.appendChild(row);
+          return wrap;
+        }
+
+        function buildFolderNode(courseId, folder, items, folders) {
+          const key = folderKey(courseId, folder.id);
+          const open = expandedFolders.has(key);
+          const node = document.createElement("div");
+          node.className = "folder-node" + (open ? " open" : "");
+
+          const head = document.createElement("div");
+          head.className = "folder-node-head";
+
+          const chevron = document.createElement("span");
+          chevron.className = "course-chevron";
+          chevron.textContent = open ? "▼" : "▶";
+
+          const title = document.createElement("span");
+          title.className = "folder-node-title";
+          title.textContent =
+            (folder.id === "root" ? "未分类" : folder.title || "未命名文件夹") +
+            "（" +
+            items.length +
+            "）";
+
+          head.appendChild(chevron);
+          head.appendChild(title);
+
+          if (folder.id !== "root") {
+            const actions = document.createElement("div");
+            actions.className = "folder-node-actions";
+            const renameBtn = document.createElement("button");
+            renameBtn.type = "button";
+            renameBtn.className = "btn";
+            renameBtn.textContent = "改名";
+            renameBtn.addEventListener("click", function (e) {
+              e.stopPropagation();
+              renameFolder(folder.id, folder.title, courseId);
+            });
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "btn danger";
+            delBtn.textContent = "删";
+            delBtn.addEventListener("click", function (e) {
+              e.stopPropagation();
+              deleteFolder(folder.id, folder.title, courseId);
+            });
+            actions.appendChild(renameBtn);
+            actions.appendChild(delBtn);
+            head.appendChild(actions);
+          }
+
+          head.addEventListener("click", function () {
+            if (expandedFolders.has(key)) expandedFolders.delete(key);
+            else expandedFolders.add(key);
+            renderCourseTree();
+          });
+
+          const body = document.createElement("div");
+          body.className = "folder-node-body";
+          if (!items.length) {
+            const empty = document.createElement("div");
+            empty.className = "folder-empty";
+            empty.textContent = "空文件夹";
+            body.appendChild(empty);
+          } else {
+            items.forEach(function (item) {
+              body.appendChild(buildTreeNoteItem(item, courseId, folders));
+            });
+          }
+
+          node.appendChild(head);
+          node.appendChild(body);
+          return node;
+        }
+
+        function buildCourseNode(summary) {
+          const id = summary.id;
+          const detail = courseDetails[id] || null;
+          const open = expandedCourses.has(id);
+          const li = document.createElement("li");
+          li.className = "course-node" + (id === activeCourseId ? " active" : "");
+
+          const head = document.createElement("button");
+          head.type = "button";
+          head.className = "course-node-head";
+          const chevron = document.createElement("span");
+          chevron.className = "course-chevron";
+          chevron.textContent = open ? "▼" : "▶";
+          const main = document.createElement("div");
+          main.className = "course-node-main";
+          const title = document.createElement("div");
+          title.className = "course-node-title";
+          title.textContent = summary.title || "未命名课程组";
+          const sub = document.createElement("div");
+          sub.className = "course-node-sub";
+          sub.textContent =
+            (summary.itemCount || 0) +
+            " 个内容 · " +
+            (summary.folderCount || 0) +
+            " 个文件夹 · " +
+            formatTime(summary.updatedAt);
+          main.appendChild(title);
+          main.appendChild(sub);
+          head.appendChild(chevron);
+          head.appendChild(main);
+          head.addEventListener("click", function () {
+            toggleCourse(id);
+          });
+          li.appendChild(head);
+
+          if (open) {
+            const body = document.createElement("div");
+            body.className = "course-node-body";
+
+            const actions = document.createElement("div");
+            actions.className = "course-node-actions";
+
+            const renameBtn = document.createElement("button");
+            renameBtn.type = "button";
+            renameBtn.className = "btn";
+            renameBtn.textContent = "重命名";
+            renameBtn.addEventListener("click", function () {
+              renameCourse(id, summary.title);
+            });
+
+            const folderBtn = document.createElement("button");
+            folderBtn.type = "button";
+            folderBtn.className = "btn";
+            folderBtn.textContent = "＋ 文件夹";
+            folderBtn.addEventListener("click", function () {
+              createFolderInCourse(id);
+            });
+
+            const addBtn = document.createElement("button");
+            addBtn.type = "button";
+            addBtn.className = "btn";
+            addBtn.textContent = addingCourseId === id ? "收起添加" : "＋ 添加";
+            addBtn.addEventListener("click", function () {
+              addingCourseId = addingCourseId === id ? null : id;
+              renderCourseTree();
+            });
+
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "btn danger";
+            delBtn.textContent = "删除";
+            delBtn.addEventListener("click", function () {
+              deleteCourse(id, summary.title);
+            });
+
+            actions.appendChild(renameBtn);
+            actions.appendChild(folderBtn);
+            actions.appendChild(addBtn);
+            actions.appendChild(delBtn);
+            body.appendChild(actions);
+
+            if (!detail) {
+              const loading = document.createElement("div");
+              loading.className = "folder-empty";
+              loading.textContent = "加载中…";
+              body.appendChild(loading);
+            } else {
+              const items = Array.isArray(detail.items) ? detail.items : [];
+              const folders = Array.isArray(detail.folders) ? detail.folders : [];
+              const byFolder = {};
+              items.forEach(function (item) {
+                const key = item.folderId || "root";
+                if (!byFolder[key]) byFolder[key] = [];
+                byFolder[key].push(item);
+              });
+
+              if ((byFolder.root || []).length) {
+                body.appendChild(
+                  buildFolderNode(
+                    id,
+                    { id: "root", title: "未分类" },
+                    byFolder.root || [],
+                    folders
+                  )
+                );
+              }
+
+              folders.forEach(function (folder) {
+                body.appendChild(
+                  buildFolderNode(id, folder, byFolder[folder.id] || [], folders)
+                );
+              });
+
+              if (!folders.length && !(byFolder.root || []).length) {
+                const empty = document.createElement("div");
+                empty.className = "folder-empty";
+                empty.textContent = "还没有内容，点「＋ 添加」或「＋ 文件夹」";
+                body.appendChild(empty);
+              }
+
+              if (addingCourseId === id) {
+                body.appendChild(buildAddBox(id, folders));
+              }
+            }
+
+            li.appendChild(body);
+          }
+
+          return li;
+        }
+
+        function renderCourseTree() {
+          courseList.innerHTML = "";
+          courseListCount.textContent = "共 " + allCourses.length + " 个课程组";
+          courseListEmpty.hidden = allCourses.length > 0;
+          courseListEmpty.textContent = "还没有课程组";
+          allCourses.forEach(function (item) {
+            courseList.appendChild(buildCourseNode(item));
+          });
+        }
+
+        function renderCourseList(groups) {
+          allCourses = Array.isArray(groups) ? groups : allCourses;
+          renderCourseTree();
+        }
+
+        async function fillAssignFolderSelect(groupId, preferred) {
+          const folderSelect = document.getElementById("assign-folder-select");
+          if (!folderSelect) return;
+          folderSelect.innerHTML = "";
+          const root = document.createElement("option");
+          root.value = "root";
+          root.textContent = "未分类（根目录）";
+          folderSelect.appendChild(root);
+          if (!groupId) return;
+          try {
+            const data = await api("/api/course-groups/" + encodeURIComponent(groupId));
+            const folders = (data.group && data.group.folders) || [];
+            folders.forEach(function (folder) {
+              const opt = document.createElement("option");
+              opt.value = folder.id;
+              opt.textContent = folder.title || "未命名文件夹";
+              folderSelect.appendChild(opt);
+            });
+            if (preferred) {
+              folderSelect.value = preferred;
+              if (folderSelect.value !== preferred) folderSelect.value = "root";
+            }
+          } catch (err) {
+            showToast(err.message || "加载文件夹失败");
+          }
+        }
+
+        async function openAssignCourse() {
+          if (!activeBvid) {
+            showToast("请先打开一条笔记");
+            return;
+          }
+          if (dirty && mode === "edit") {
+            await saveCurrent({ silent: true });
+          }
+          assignReturnMode = mode === "edit" ? "edit" : "preview";
+          if (!allCourses.length) await loadCourses();
+          if (!allCourses.length) {
+            showToast("还没有课程组，请先新建一个");
+            setSideView("courses");
+            showCreateCourse();
+            return;
+          }
+
+          const title =
+            (mode === "edit" ? titleInput.value : previewHeading.textContent) ||
+            activeBvid;
+          document.getElementById("assign-note-label").value =
+            title + " · " + activeBvid;
+          document.getElementById("assign-note-meta").textContent =
+            "将笔记加入课程组。写完或写一半都可以，不会改动笔记正文。";
+
+          const courseSelect = document.getElementById("assign-course-select");
+          courseSelect.innerHTML = "";
+          allCourses.forEach(function (g) {
+            const opt = document.createElement("option");
+            opt.value = g.id;
+            opt.textContent =
+              (g.title || "未命名") + "（" + (g.itemCount || 0) + "）";
+            courseSelect.appendChild(opt);
+          });
+          if (activeCourseId) courseSelect.value = activeCourseId;
+          await fillAssignFolderSelect(courseSelect.value);
+          setMode("assign-course");
+        }
+
+        function cancelAssignCourse() {
+          if (assignReturnMode === "edit") setMode("edit");
+          else if (assignReturnMode === "preview") setMode("preview");
+          else setMode("welcome");
+        }
+
+        async function submitAssignCourse(e) {
+          e.preventDefault();
+          if (!activeBvid) return;
+          const groupId = String(
+            document.getElementById("assign-course-select").value || ""
+          ).trim();
+          const folderRaw = String(
+            document.getElementById("assign-folder-select").value || "root"
+          );
+          const folderId = folderRaw === "root" ? null : folderRaw;
+          if (!groupId) {
+            showToast("请选择课程组");
+            return;
+          }
+          const title =
+            String(titleInput.value || previewHeading.textContent || "").trim() ||
+            activeBvid;
+          try {
+            const data = await api(
+              "/api/course-groups/" + encodeURIComponent(groupId) + "/items",
+              "POST",
+              { bvid: activeBvid, title: title, folderId: folderId }
+            );
+            showToast(data.moved ? "已更新所在文件夹" : "已加入课程组");
+            await loadCourses();
+            setSideView("courses");
+            expandedCourses.add(groupId);
+            activeCourseId = groupId;
+            if (data.group) courseDetails[groupId] = data.group;
+            noteReturnContext = { type: "course", courseId: groupId };
+            renderCourseTree();
+            setMode("welcome");
+          } catch (err) {
+            showToast(err.message || "加入失败");
+          }
+        }
+
+        function renderHits(hits) {
+          hitsList.innerHTML = "";
+          if (!hits || !hits.length) {
+            hitsEl.classList.remove("show");
+            return;
+          }
+          hitsEl.classList.add("show");
+          hits.forEach(function (hit) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "hit-item";
+            const title = document.createElement("strong");
+            title.textContent = hit.heading || hit.bvid || "片段";
+            const text = document.createElement("span");
+            text.textContent = hit.text || "";
+            btn.appendChild(title);
+            btn.appendChild(text);
+            btn.addEventListener("click", function () {
+              openPreview(hit.bvid);
+            });
+            hitsList.appendChild(btn);
+          });
+        }
+
+        async function loadList() {
+          try {
+            const data = await api("/api/notes");
+            allNotes = Array.isArray(data.notes) ? data.notes : [];
+            const q = String(searchInput.value || "").trim();
+            if (q) {
+              await runSearch(q);
+            } else {
+              renderHits([]);
+              renderList(allNotes);
+            }
+          } catch (err) {
+            listCount.textContent = "加载失败";
+            listEmpty.hidden = false;
+            listEmpty.textContent = err.message || "无法读取笔记库";
+            showToast(err.message || "笔记列表加载失败");
+          }
+        }
+
+        async function runSearch(q) {
+          try {
+            const data = await api("/api/notes/search?q=" + encodeURIComponent(q));
+            const notes = Array.isArray(data.notes) ? data.notes : [];
+            const hits = Array.isArray(data.hits) ? data.hits : [];
+            renderList(notes);
+            renderHits(hits);
+          } catch (err) {
+            showToast(err.message || "搜索失败");
+          }
+        }
+
+        function scheduleSearch() {
+          clearTimeout(searchTimer);
+          searchTimer = setTimeout(function () {
+            const q = String(searchInput.value || "").trim();
+            if (!q) {
+              renderHits([]);
+              renderList(allNotes);
+              return;
+            }
+            runSearch(q);
+          }, 220);
+        }
+
+        async function openPreview(bvid, opts) {
+          opts = opts || {};
+          if (dirty && activeBvid && mode === "edit") {
+            await saveCurrent({ silent: true });
+          }
+          try {
+            const data = await api("/api/notes/" + encodeURIComponent(bvid));
+            const doc = data.doc || {};
+            activeBvid = doc.bvid || bvid;
+            dirty = false;
+            if (opts.fromCourseId) {
+              noteReturnContext = { type: "course", courseId: String(opts.fromCourseId) };
+              activeCourseId = String(opts.fromCourseId);
+              setSideView("courses");
+            } else if (sideView !== "courses") {
+              noteReturnContext = null;
+            }
+            titleInput.value = doc.title || "";
+            bodyInput.value = doc.bodyMd || "";
+            const meta =
+              activeBvid +
+              " · 更新于 " +
+              formatTime(doc.updatedAt) +
+              (doc.createdAt ? " · 创建于 " + formatTime(doc.createdAt) : "");
+            previewMeta.textContent = meta;
+            editMeta.textContent = meta;
+            previewHeading.textContent = doc.title || activeBvid || "笔记";
+            renderMarkdownInto(previewBody, doc.bodyMd || "");
+            saveHint.textContent = "修改会自动保存";
+            setMode("preview");
+
+            if (sideView === "notes") {
+              const q = String(searchInput.value || "").trim();
+              if (q) await runSearch(q);
+              else renderList(allNotes);
+            } else {
+              renderCourseTree();
+            }
+          } catch (err) {
+            showToast(err.message || "打开笔记失败");
+          }
+        }
+
+        function showEdit() {
+          setMode("edit");
+          renderMarkdownInto(editPreview, bodyInput.value);
+          titleInput.focus();
+        }
+
+        async function saveCurrent(opts) {
+          opts = opts || {};
+          if (!activeBvid) return;
+          const title = titleInput.value;
+          const bodyMd = bodyInput.value;
+          try {
+            if (!opts.silent) saveHint.textContent = "保存中…";
+            const data = await api("/api/notes/" + encodeURIComponent(activeBvid), "PUT", {
+              title: title,
+              bodyMd: bodyMd,
+            });
+            dirty = false;
+            const updatedAt = data.doc && data.doc.updatedAt;
+            const createdAt = data.doc && data.doc.createdAt;
+            const meta =
+              activeBvid +
+              " · 更新于 " +
+              formatTime(updatedAt || Date.now()) +
+              (createdAt ? " · 创建于 " + formatTime(createdAt) : "");
+            editMeta.textContent = meta;
+            previewMeta.textContent = meta;
+            previewHeading.textContent = title || activeBvid;
+            saveHint.textContent = opts.silent ? "已自动保存" : "已保存";
+            if (!opts.silent) showToast("笔记已保存");
+            renderMarkdownInto(editPreview, bodyMd);
+            await loadList();
+          } catch (err) {
+            saveHint.textContent = "保存失败";
+            showToast(err.message || "保存失败");
+          }
+        }
+
+        function scheduleSave() {
+          if (!activeBvid || mode !== "edit") return;
+          dirty = true;
+          saveHint.textContent = "有未保存修改…";
+          scheduleEditPreview();
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(function () {
+            saveTimer = null;
+            saveCurrent({ silent: true });
+          }, 450);
+        }
+
+        async function deleteCurrent() {
+          if (!activeBvid) return;
+          const bvid = activeBvid;
+          const ok = window.confirm("确定删除这条笔记？\n" + bvid + "\n删除后不可恢复。");
+          if (!ok) return;
+          try {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+            dirty = false;
+            await api("/api/notes/" + encodeURIComponent(bvid), "DELETE");
+            showToast("已删除笔记");
+            activeBvid = null;
+            setMode("welcome");
+            await loadList();
+            await loadCourses();
+          } catch (err) {
+            const msg = String(err.message || err);
+            if (/不存在|404|not found/i.test(msg)) {
+              showToast("笔记已不在库中");
+              activeBvid = null;
+              setMode("welcome");
+              await loadList();
+              await loadCourses();
+            } else {
+              showToast(msg || "删除失败");
+            }
+          }
+        }
+
+        async function loadCourses() {
+          try {
+            const data = await api("/api/course-groups");
+            allCourses = Array.isArray(data.groups) ? data.groups : [];
+            // refresh cached details for expanded courses
+            const ids = Array.from(expandedCourses);
+            for (let i = 0; i < ids.length; i += 1) {
+              try {
+                const detail = await api("/api/course-groups/" + encodeURIComponent(ids[i]));
+                if (detail.group) {
+                  courseDetails[ids[i]] = detail.group;
+                  if (activeCourseId === ids[i]) activeCourse = detail.group;
+                }
+              } catch (_) {}
+            }
+            renderCourseTree();
+          } catch (err) {
+            courseListCount.textContent = "加载失败";
+            courseListEmpty.hidden = false;
+            courseListEmpty.textContent = err.message || "无法读取课程组";
+            showToast(err.message || "课程组加载失败");
+          }
+        }
+
+        async function toggleCourse(id) {
+          const key = String(id || "").trim();
+          if (!key) return;
+          if (expandedCourses.has(key)) {
+            expandedCourses.delete(key);
+            if (activeCourseId === key) {
+              activeCourseId = null;
+              activeCourse = null;
+            }
+            renderCourseTree();
+            return;
+          }
+          await openCourse(key);
+        }
+
+        async function openCourse(id) {
+          const key = String(id || "").trim();
+          if (!key) return;
+          try {
+            const data = await api("/api/course-groups/" + encodeURIComponent(key));
+            const group = data.group;
+            if (!group) throw new Error("课程组不存在");
+            courseDetails[key] = group;
+            activeCourse = group;
+            activeCourseId = key;
+            expandedCourses.add(key);
+            setSideView("courses");
+            if (sideCreateBox) sideCreateBox.classList.remove("show");
+            renderCourseTree();
+          } catch (err) {
+            showToast(err.message || "打开课程组失败");
+          }
+        }
+
+        function showCreateCourse() {
+          setSideView("courses");
+          if (sideCreateBox) sideCreateBox.classList.add("show");
+          document.getElementById("create-course-title").value = "";
+          document.getElementById("create-course-title").focus();
+        }
+
+        async function createCourseFromForm(e) {
+          e.preventDefault();
+          const title = String(document.getElementById("create-course-title").value || "").trim();
+          if (!title) {
+            showToast("请填写课程组名称");
+            return;
+          }
+          try {
+            const data = await api("/api/course-groups", "POST", { title: title, topic: "" });
+            showToast("已创建课程组");
+            if (sideCreateBox) sideCreateBox.classList.remove("show");
+            await loadCourses();
+            if (data.group && data.group.id) await openCourse(data.group.id);
+          } catch (err) {
+            showToast(err.message || "创建失败");
+          }
+        }
+
+        async function renameCourse(courseId, currentTitle) {
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id) return;
+          const nextTitle = window.prompt("课程组名称", currentTitle || "");
+          if (nextTitle == null) return;
+          const title = String(nextTitle).trim();
+          if (!title) {
+            showToast("名称不能为空");
+            return;
+          }
+          try {
+            const data = await api(
+              "/api/course-groups/" + encodeURIComponent(id),
+              "PUT",
+              { title: title, topic: "" }
+            );
+            showToast("已更新名称");
+            if (data.group) courseDetails[id] = data.group;
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "更新失败");
+          }
+        }
+
+        async function deleteCourse(courseId, title) {
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id) return;
+          const name = title || (courseDetails[id] && courseDetails[id].title) || id;
+          const ok = window.confirm(
+            "确定删除课程组「" + name + "」？\n只会移除分组，不会删除视频笔记。"
+          );
+          if (!ok) return;
+          try {
+            await api("/api/course-groups/" + encodeURIComponent(id), "DELETE");
+            showToast("已删除课程组");
+            expandedCourses.delete(id);
+            delete courseDetails[id];
+            if (activeCourseId === id) {
+              activeCourseId = null;
+              activeCourse = null;
+            }
+            if (noteReturnContext && noteReturnContext.courseId === id) {
+              noteReturnContext = null;
+            }
+            if (mode === "preview" || mode === "edit") {
+              /* keep note open */
+            } else {
+              setMode("welcome");
+            }
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "删除失败");
+          }
+        }
+
+        async function addVideoToCourse(e, courseId, box) {
+          e.preventDefault();
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id) return;
+          const scope = box || document;
+          const folderRaw = String(scope.querySelector("#add-video-folder")?.value || "root");
+          const folderId = folderRaw === "root" ? null : folderRaw;
+          let bvid = "";
+          let title = "";
+
+          if (addVideoMode === "note") {
+            bvid = String(scope.querySelector("#add-video-note")?.value || "").trim();
+            if (!bvid) {
+              showToast("请选择一条笔记");
+              return;
+            }
+            const note = allNotes.find(function (n) { return n.bvid === bvid; });
+            title = note ? String(note.title || "").trim() : "";
+          } else {
+            bvid = String(scope.querySelector("#add-video-bvid")?.value || "").trim();
+            title = String(scope.querySelector("#add-video-title")?.value || "").trim();
+            if (!bvid) {
+              showToast("请输入 BV 号或链接");
+              return;
+            }
+          }
+
+          try {
+            const data = await api(
+              "/api/course-groups/" + encodeURIComponent(id) + "/items",
+              "POST",
+              { bvid: bvid, title: title, folderId: folderId }
+            );
+            showToast(data.moved ? "已更新所在文件夹" : "已加入课程组");
+            addingCourseId = null;
+            if (data.group) courseDetails[id] = data.group;
+            if (folderId) expandedFolders.add(folderKey(id, folderId));
+            else expandedFolders.add(folderKey(id, "root"));
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "添加失败");
+          }
+        }
+
+        async function createFolderInCourse(courseId) {
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id) return;
+          const name = window.prompt("文件夹名称", "");
+          if (name == null) return;
+          const title = String(name).trim();
+          if (!title) {
+            showToast("名称不能为空");
+            return;
+          }
+          try {
+            const data = await api(
+              "/api/course-groups/" + encodeURIComponent(id) + "/folders",
+              "POST",
+              { title: title }
+            );
+            showToast("已创建文件夹");
+            if (data.group) courseDetails[id] = data.group;
+            if (data.folderId) expandedFolders.add(folderKey(id, data.folderId));
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "创建文件夹失败");
+          }
+        }
+
+        async function renameFolder(folderId, currentTitle, courseId) {
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id || !folderId) return;
+          const next = window.prompt("文件夹名称", currentTitle || "");
+          if (next == null) return;
+          const title = String(next).trim();
+          if (!title) {
+            showToast("名称不能为空");
+            return;
+          }
+          try {
+            const data = await api(
+              "/api/course-groups/" +
+                encodeURIComponent(id) +
+                "/folders/" +
+                encodeURIComponent(folderId),
+              "PUT",
+              { title: title }
+            );
+            showToast("已重命名");
+            if (data.group) courseDetails[id] = data.group;
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "重命名失败");
+          }
+        }
+
+        async function deleteFolder(folderId, title, courseId) {
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id || !folderId) return;
+          const ok = window.confirm(
+            "删除文件夹「" +
+              (title || "") +
+              "」？\n里面的内容会回到「未分类」，不会移出课程组。"
+          );
+          if (!ok) return;
+          try {
+            const data = await api(
+              "/api/course-groups/" +
+                encodeURIComponent(id) +
+                "/folders/" +
+                encodeURIComponent(folderId),
+              "DELETE"
+            );
+            showToast("已删除文件夹");
+            expandedFolders.delete(folderKey(id, folderId));
+            if (data.group) courseDetails[id] = data.group;
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "删除失败");
+          }
+        }
+
+        async function moveVideoToFolder(bvid, folderRaw, courseId) {
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id || !bvid) return;
+          const folderId = folderRaw === "root" ? null : folderRaw;
+          try {
+            const data = await api(
+              "/api/course-groups/" +
+                encodeURIComponent(id) +
+                "/items/" +
+                encodeURIComponent(bvid),
+              "PUT",
+              { folderId: folderId }
+            );
+            showToast("已移动");
+            if (data.group) courseDetails[id] = data.group;
+            expandedFolders.add(folderKey(id, folderId || "root"));
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "移动失败");
+          }
+        }
+
+        async function removeVideoFromCourse(bvid, courseId) {
+          const id = String(courseId || activeCourseId || "").trim();
+          if (!id || !bvid) return;
+          const ok = window.confirm("从课程组移出该内容？\n" + bvid + "\n不会删除对应笔记。");
+          if (!ok) return;
+          try {
+            const data = await api(
+              "/api/course-groups/" +
+                encodeURIComponent(id) +
+                "/items/" +
+                encodeURIComponent(bvid),
+              "DELETE"
+            );
+            showToast("已移出");
+            if (data.group) courseDetails[id] = data.group;
+            await loadCourses();
+          } catch (err) {
+            showToast(err.message || "移出失败");
+          }
+        }
+
+        async function closeNoteView() {
+          if (dirty && activeBvid && mode === "edit") {
+            await saveCurrent({ silent: true });
+          }
+          dirty = false;
+          activeBvid = null;
+          const back = noteReturnContext;
+          noteReturnContext = back; // keep course context while returning
+          if (back && back.type === "course" && back.courseId) {
+            setSideView("courses");
+            await openCourse(back.courseId);
+            setMode("welcome");
+            return;
+          }
+          noteReturnContext = null;
+          setMode("welcome");
+          const q = String(searchInput.value || "").trim();
+          if (sideView === "notes") {
+            if (q) runSearch(q);
+            else renderList(allNotes);
+          } else {
+            renderCourseTree();
+          }
+        }
+
+        searchInput.addEventListener("input", scheduleSearch);
+        tabNotes.addEventListener("click", function () {
+          setSideView("notes");
+          noteReturnContext = null;
+        });
+        tabCourses.addEventListener("click", function () {
+          setSideView("courses");
+        });
+        document.getElementById("btn-new-course").addEventListener("click", showCreateCourse);
+        document.getElementById("form-create-course").addEventListener("submit", createCourseFromForm);
+        document.getElementById("btn-cancel-create-course").addEventListener("click", function () {
+          if (sideCreateBox) sideCreateBox.classList.remove("show");
+        });
+        document.getElementById("btn-assign-course").addEventListener("click", openAssignCourse);
+        document.getElementById("btn-assign-course-edit").addEventListener("click", openAssignCourse);
+        document.getElementById("btn-cancel-assign").addEventListener("click", cancelAssignCourse);
+        document.getElementById("btn-cancel-assign-form").addEventListener("click", cancelAssignCourse);
+        document.getElementById("form-assign-course").addEventListener("submit", submitAssignCourse);
+        document.getElementById("assign-course-select").addEventListener("change", function () {
+          fillAssignFolderSelect(this.value);
+        });
+
+        document.getElementById("btn-close-window").addEventListener("click", function () {
+          window.close();
+          setTimeout(function () {
+            document.body.innerHTML =
+              '<p style="font:400 18px ZCOOL KuaiLe,Nunito,sans-serif;padding:48px;color:#7a6352;text-align:center;line-height:1.7">已关闭知识库<br/><span style="font-size:14px;opacity:.85">可直接关掉此标签页</span></p>';
+          }, 120);
+        });
+        document.getElementById("btn-close-note").addEventListener("click", function () {
+          closeNoteView();
+        });
+        document.getElementById("btn-edit").addEventListener("click", showEdit);
+        document.getElementById("btn-back-preview").addEventListener("click", async function () {
+          if (dirty) await saveCurrent({ silent: true });
+          renderMarkdownInto(previewBody, bodyInput.value);
+          previewHeading.textContent = titleInput.value || activeBvid || "笔记";
+          setMode("preview");
+        });
+        document.getElementById("btn-save").addEventListener("click", function () {
+          saveCurrent();
+        });
+        document.getElementById("btn-delete-preview").addEventListener("click", deleteCurrent);
+        document.getElementById("btn-delete-edit").addEventListener("click", deleteCurrent);
+        titleInput.addEventListener("input", scheduleSave);
+        bodyInput.addEventListener("input", scheduleSave);
+
+        document.addEventListener("keydown", function (e) {
+          if (e.key !== "Escape") return;
+          if (mode === "edit") {
+            document.getElementById("btn-back-preview").click();
+          } else if (mode === "preview") {
+            closeNoteView();
+          } else if (mode === "assign-course") {
+            cancelAssignCourse();
+          } else if (sideCreateBox && sideCreateBox.classList.contains("show")) {
+            sideCreateBox.classList.remove("show");
+          }
+        });
+
+        setMode("welcome");
+        setSideView("notes");
+        loadList();
+        loadCourses();
+      })();
+    </script>
   </body>
 </html>

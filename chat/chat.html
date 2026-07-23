@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 对话</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="chat.css" />
+</head>
+<body>
+  <div class="chat-window">
+    <header class="chat-bar">
+      <div class="chat-bar-text">
+        <p class="chat-kicker">BiliOtter · CHAT</p>
+        <h1 class="chat-title">AI 对话</h1>
+      </div>
+      <button type="button" class="chat-close" id="chat-close" aria-label="关闭">×</button>
+    </header>
+
+    <div id="chat-log" class="chat-log" aria-live="polite"></div>
+
+    <form id="chat-form" class="chat-form">
+      <input
+        id="chat-input"
+        class="chat-input"
+        type="text"
+        maxlength="800"
+        placeholder="说点什么…"
+        autocomplete="off"
+      />
+      <button type="submit" id="chat-send" class="chat-send">发送</button>
+    </form>
+  </div>
+  <script src="chat.js"></script>
+</body>
+</html>

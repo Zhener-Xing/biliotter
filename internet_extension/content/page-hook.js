@@ -1,7 +1,3 @@
-/**
- * 运行在页面主世界：仅代发 JSON（带登录 cookie）。
- * 不再拦截字幕正文，避免串台。
- */
 (() => {
   if (window.__biliPetHookInstalled) return;
   window.__biliPetHookInstalled = true;

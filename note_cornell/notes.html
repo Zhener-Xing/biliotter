@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>笔记</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="vendor/katex.min.css" />
+  <link rel="stylesheet" href="notes.css" />
+</head>
+<body>
+  <div class="notes-window">
+    <header class="notes-bar">
+      <div class="notes-bar-text">
+        <p class="notes-kicker">BiliOtter · NOTES</p>
+        <h1 class="notes-title" id="notes-heading">笔记</h1>
+        <p class="notes-status" id="notes-status">手写会实时保存…</p>
+      </div>
+      <div class="notes-bar-actions">
+        <button type="button" class="notes-organize" id="notes-organize">一键整理</button>
+        <button type="button" class="notes-close" id="notes-close" aria-label="关闭">×</button>
+      </div>
+    </header>
+
+    <div class="notes-hint" id="notes-hint">
+      以你写的为主，改动实时入库。「一键整理」只在文末增补 AI 区块，不改你的原文；字幕按已看进度整段参考。可拖入截图，支持 LaTeX 与代码块。
+    </div>
+
+    <article class="notes-sheet" id="notes-sheet" aria-label="笔记正文">
+      <div class="notes-workspace" id="notes-workspace">
+        <textarea
+          id="notes-editor"
+          class="notes-editor"
+          spellcheck="true"
+          placeholder="在此撰写 Markdown…&#10;&#10;公式：$E=mc^2$ 或 $$\\int_0^1 x^2 dx$$&#10;代码：&#10;```js&#10;console.log(1)&#10;```&#10;截图：直接拖进来&#10;&#10;写完或看了一段后，点右上角「一键整理」"
+        ></textarea>
+        <div class="notes-preview md-body" id="notes-preview" aria-label="预览"></div>
+      </div>
+    </article>
+  </div>
+
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="vendor/katex.min.js"></script>
+  <script src="vendor/auto-render.min.js"></script>
+  <script src="notes.js"></script>
+</body>
+</html>

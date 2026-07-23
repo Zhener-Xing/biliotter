@@ -3,12 +3,8 @@ const http = require('http');
 const BRIDGE_HOST = '127.0.0.1';
 const BRIDGE_PORT = 39261;
 
-/**
- * 本地桥接：接收浏览器扩展的实时事件，回调给 Electron 主进程。
- */
 function startBridgeServer(onEvent) {
   const server = http.createServer(async (req, res) => {
-    // CORS：扩展 service worker 直连本机
     const cors = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',

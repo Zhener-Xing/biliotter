@@ -12,7 +12,7 @@ body {
     background: transparent;
     user-select: none;
     -webkit-user-select: none;
-    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+    font-family: "Press Start 2P", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", monospace;
 }
 
 #pet-container {
@@ -23,22 +23,22 @@ body {
     align-items: center;
     justify-content: center;
     position: relative;
-    /* 拖动窗口 */
     -webkit-app-region: drag;
 }
 
 #pet-sprite {
-    width: 160px;
-    height: 160px;
-    object-fit: contain;
+    /* 宽高由 renderer 按素材原始像素等比设置，避免 contain 把带火/问号的整图连同水獭一起缩小 */
+    width: auto;
+    height: auto;
     cursor: grab;
-    /* 自定义拖动（见 renderer），保留 hover / click */
     -webkit-app-region: no-drag;
-    animation: idle-float 2.4s ease-in-out infinite;
-    filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.25));
-    transition: transform 0.2s ease;
-    image-rendering: auto;
+    animation: idle-float 2.4s steps(4, end) infinite;
+    filter: drop-shadow(3px 3px 0 rgba(59, 42, 31, 0.35));
+    transition: transform 0.1s steps(2, end);
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
     pointer-events: auto;
+    z-index: 1;
 }
 
 #pet-sprite:active {
@@ -50,40 +50,8 @@ body {
     transform: scale(1.06);
 }
 
-#speech-bubble {
-    position: absolute;
-    top: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    max-width: 240px;
-    padding: 8px 14px;
-    background: #fff;
-    color: #333;
-    font-size: 13px;
-    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
-    line-height: 1.4;
-    border-radius: 12px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-    white-space: pre-wrap;
-    word-break: break-word;
-    text-align: center;
-    pointer-events: none;
-    z-index: 2;
-}
-
-#speech-bubble::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    bottom: -7px;
-    transform: translateX(-50%);
-    border-width: 8px 7px 0;
-    border-style: solid;
-    border-color: #fff transparent transparent;
-}
-
 #pet-sprite.pet-alert {
-    animation: pet-shake 0.45s ease;
+    animation: pet-shake 0.45s steps(4, end);
 }
 
 @keyframes idle-float {
@@ -92,7 +60,7 @@ body {
         transform: translateY(0);
     }
     50% {
-        transform: translateY(-10px);
+        transform: translateY(-8px);
     }
 }
 
@@ -102,9 +70,9 @@ body {
         transform: translateX(0);
     }
     25% {
-        transform: translateX(-6px) rotate(-4deg);
+        transform: translateX(-5px);
     }
     75% {
-        transform: translateX(6px) rotate(4deg);
+        transform: translateX(5px);
     }
 }

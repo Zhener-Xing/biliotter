@@ -21,6 +21,7 @@ function reasonLabel(reason) {
     window_blur: '切到其他应用',
     route_change: '站内跳转离开',
     switch_bvid: '换了另一个视频',
+    scroll: '滑动页面走神',
     tab_visible: '回到视频标签',
     recording_disabled: '关闭了采集',
   };

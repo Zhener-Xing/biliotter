@@ -1,6 +1,15 @@
 node_modules/
 .venv/
 .chrome-pet-profile/
+.bili-pet-pid
+.bili-pet-notes-buffer.json
+.bili-pet-notes-buffer.json.migrated
+.bili-pet-notes.db
+.bili-pet-notes.db-wal
+.bili-pet-notes.db-shm
+notes-assets/
 .DS_Store
 *.log
 assets/_preview/
+.env
+.env.local

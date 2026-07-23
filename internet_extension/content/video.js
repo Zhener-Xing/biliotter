@@ -1,6 +1,3 @@
-/**
- * 视频页：只锁定当前 BV，字幕按观看进度拼成一条长字符串。
- */
 (() => {
   const cfg = BILI_PET_CONFIG;
   const schema = BiliSchema;
@@ -12,6 +9,8 @@
     cid: null,
     title: '',
     owner: '',
+    /** resolveCid 精简字段，供 buildModelInput */
+    videoMeta: null,
     subtitlePack: null,
     /** 本片已看过的字幕，拼成一条长串 */
     transcript: '',
@@ -23,19 +22,18 @@
     startedAt: 0,
     subtitleRetryTimer: null,
     subtitleRetries: 0,
-    /** 防止换片后旧请求回写 */
     loadToken: 0,
   };
 
   function parseBvid(url = location.href) {
     const m = url.match(/\/video\/(BV[\w]+)/i);
     return m ? m[1] : null;
-  }
+  }//解析BVID
 
   function parsePage() {
     const m = location.search.match(/[?&]p=(\d+)/);
     return m ? Number(m[1]) : 1;
-  }
+  }//解析页码
 
   function findVideoElement() {
     return (
@@ -43,14 +41,14 @@
       document.querySelector('.bpx-player-video-wrap video') ||
       null
     );
-  }
+  }//查找视频元素
 
   function send(payload) {
     if (!state.enabled && payload.kind !== 'settings_ack') return;
     try {
       chrome.runtime.sendMessage({ type: 'BILI_PET_EVENT', payload });
     } catch (_) {}
-  }
+  }//发送事件
 
   function getContext() {
     return {
@@ -61,12 +59,12 @@
       currentTime: state.videoEl?.currentTime ?? state.lastTime,
       paused: Boolean(state.videoEl?.paused),
     };
-  }
+  }//获取上下文
 
   function resetTranscript() {
     state.transcript = '';
     state.seenLineKeys = new Set();
-  }
+  }//重置转录
 
   function appendTranscriptLine(line) {
     if (!line?.content) return false;
@@ -77,6 +75,18 @@
     if (!text) return false;
     state.transcript = state.transcript ? `${state.transcript}\n${text}` : text;
     return true;
+  }//添加转录行
+
+  function seedTranscriptUpTo(t) {
+    const body = state.subtitlePack?.body;
+    if (!Array.isArray(body) || !body.length) return;
+    const at = Number(t);
+    if (!Number.isFinite(at) || at < 0) return;
+    const lines = body
+      .slice()
+      .sort((a, b) => (a.from || 0) - (b.from || 0))
+      .filter((line) => Number(line?.from ?? 0) <= at + 0.35);
+    for (const line of lines) appendTranscriptLine(line);
   }
 
   function packIsForCurrent(pack) {
@@ -86,7 +96,7 @@
       return false;
     }
     return true;
-  }
+  }//包是否当前视频
 
   async function refreshSettings() {
     try {
@@ -95,14 +105,14 @@
     } catch (_) {
       state.enabled = true;
     }
-  }
+  }//刷新设置
 
   function stopSubtitleRetries() {
     if (state.subtitleRetryTimer) {
       clearInterval(state.subtitleRetryTimer);
       state.subtitleRetryTimer = null;
     }
-  }
+  }//停止字幕重试
 
   function scheduleSubtitleRetries() {
     stopSubtitleRetries();
@@ -119,7 +129,7 @@
       }
       ensureSubtitles({ force: true });
     }, 4000);
-  }
+  }//计划字幕重试 
 
   async function ensureSubtitles({ force = false } = {}) {
     if (!state.bvid) return null;
@@ -134,6 +144,16 @@
       state.cid = meta.cid;
       state.title = meta.title;
       state.owner = meta.owner || '';
+      state.videoMeta = {
+        bvid: meta.bvid,
+        aid: meta.aid,
+        title: meta.title,
+        owner: meta.owner || '',
+        cid: meta.cid,
+        page: meta.page,
+        part: meta.part,
+        duration: meta.duration,
+      };
 
       const pack = await BiliSubtitle.load(lockedBvid, meta.cid, { force });
       if (token !== state.loadToken || state.bvid !== lockedBvid) return null;
@@ -158,6 +178,10 @@
 
       if (pack.status === 'ok' && pack.body?.length) {
         stopSubtitleRetries();
+        const t =
+          state.videoEl?.currentTime ??
+          (state.lastTime >= 0 ? state.lastTime : 0);
+        seedTranscriptUpTo(t);
         syncProgress(true);
       } else {
         scheduleSubtitleRetries();
@@ -176,23 +200,47 @@
       scheduleSubtitleRetries();
       return null;
     }
-  }
+  }//构建字幕切片
 
   function buildSubtitleSlice(t) {
     const pack = state.subtitlePack;
     if (!packIsForCurrent(pack)) {
-      return { currentSubtitle: null, contextText: '', transcriptText: state.transcript };
+      return {
+        currentSubtitle: null,
+        contextText: '',
+        transcriptText: state.transcript,
+        modelInput: null,
+      };
     }
     const body = pack.body || [];
+    const before = cfg.SUBTITLE_CONTEXT_BEFORE_SEC ?? 20;
+    const after = cfg.SUBTITLE_CONTEXT_AFTER_SEC ?? 8;
+    const lines = BiliSubtitle.windowAround(body, t, before, after);
     const current = BiliSubtitle.atTime(body, t);
+    const currentSubtitle = current
+      ? { from: current.from, to: current.to, content: current.content }
+      : null;
+    const text = schema.contextText(lines);
+    const modelInput = schema.buildModelInput({
+      meta: state.videoMeta || {
+        bvid: state.bvid,
+        cid: state.cid,
+        title: state.title,
+        owner: state.owner,
+      },
+      lines,
+      t,
+      currentSubtitle,
+      sessionId: state.sessionId,
+      paused: state.videoEl?.paused,
+    });
     return {
-      currentSubtitle: current
-        ? { from: current.from, to: current.to, content: current.content }
-        : null,
-      contextText: current?.content || '',
+      currentSubtitle,
+      contextText: text,
       transcriptText: state.transcript,
+      modelInput,
     };
-  }
+  }//同步进度
 
   function syncProgress(force = false) {
     if (!state.enabled) return;
@@ -233,6 +281,7 @@
           currentSubtitle: slice.currentSubtitle,
           contextText: slice.contextText,
           transcriptText: state.transcript,
+          modelInput: slice.modelInput,
         })
       );
     }
@@ -248,10 +297,11 @@
           currentSubtitle: slice.currentSubtitle,
           contextText: slice.contextText,
           transcriptText: state.transcript,
+          modelInput: slice.modelInput,
         })
       );
     }
-  }
+  }//发送心跳
 
   function endSession(reason) {
     if (!state.sessionId) return;
@@ -270,7 +320,7 @@
         transcriptText: state.transcript,
       })
     );
-  }
+  }//结束会话
 
   async function bootForCurrentVideo() {
     await refreshSettings();
@@ -294,6 +344,7 @@
     state.loadToken += 1;
     state.bvid = bvid;
     state.cid = null;
+    state.videoMeta = null;
     state.sessionId = schema.newSessionId(bvid);
     state.subtitlePack = null;
     state.lastLineKey = '';
@@ -322,12 +373,13 @@
       if (state.videoEl || tries > 40) {
         clearInterval(waitVideo);
         if (!state.videoEl) return;
+        seedTranscriptUpTo(state.videoEl.currentTime || 0);
         state.videoEl.addEventListener('timeupdate', () => syncProgress(false));
         state.videoEl.addEventListener('seeked', () => syncProgress(true));
         syncProgress(true);
       }
     }, 250);
-  }
+  }//启动当前视频
 
   BiliActions.watchFocusBreaks(getContext);
 
