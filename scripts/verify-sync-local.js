@@ -1,9 +1,4 @@
 'use strict';
-
-/**
- * Local-only smoke verification for multi-uid DB + pending (no cloud required).
- * Run: node scripts/verify-sync-local.js
- */
 process.env.BILI_PET_SKIP_LEGACY_MIGRATE = '1';
 
 const fs = require('fs');

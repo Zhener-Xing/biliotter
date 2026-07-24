@@ -107,7 +107,7 @@ async function completeTask(taskId, userContent, opts = {}) {
   const content =
     typeof userContent === 'string'
       ? userContent
-      : JSON.stringify(userContent, null, 2);
+      : JSON.stringify(userContent);
 
   return chatCompletion({
     max_tokens: opts.max_tokens ?? 1200,

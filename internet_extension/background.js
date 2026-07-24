@@ -60,7 +60,7 @@ function isHighPriority(payload) {
   );
 }
 
-/** @type {string | null | undefined} 
+/** @type {string | null | undefined} */
 let lastKnownUid = undefined;
 /** @type {ReturnType<typeof setTimeout> | null} */
 let biliTabsReloadTimer = null;

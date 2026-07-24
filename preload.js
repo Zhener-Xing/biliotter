@@ -31,6 +31,18 @@ contextBridge.exposeInMainWorld('biliPet', {
   chat(messages) {
     return ipcRenderer.invoke('pet:chat', { messages });
   },
+  gameAnswer(choice) {
+    return ipcRenderer.invoke('pet:gameAnswer', { choice });
+  },
+  gameStop() {
+    return ipcRenderer.invoke('pet:gameStop');
+  },
+  onGameStopped(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('pet:gameStopped', handler);
+    return () => ipcRenderer.removeListener('pet:gameStopped', handler);
+  },
   closeWindow() {
     return ipcRenderer.invoke('pet:closeWindow');
   },

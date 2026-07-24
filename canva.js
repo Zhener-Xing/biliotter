@@ -7,6 +7,14 @@ const { loadEnv } = require('./load-env');
 const { createNotesOrganizer, chatCompletion } = require('./llm');
 const { getSystemPrompt } = require('./prompts');
 const { tryHandleCourseChat } = require('./course-actions');
+const {
+  tryHandleGameChat,
+  answerGame,
+  stopGame,
+  isPlaying,
+  isActive: isGameActive,
+  setPetNotifier,
+} = require('./skills/game-quiz');
 const { handleAccountPayload, loadAccount } = require('./account-bind');
 const {
   closeNotesDb,
@@ -102,6 +110,8 @@ const MAX_NOTE_ASSET_BYTES = 8 * 1024 * 1024;
 let lastChordD = 0;
 let lastChordC = 0;
 let lastChordO = 0;
+let lastChordS = 0;
+let lastChordG = 0;
 const CHORD_MS = 500;
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -262,6 +272,61 @@ function registerStopChord() {
     console.warn('[bili-pet] failed to register ⌘D+O stop chord');
   }
 }//注册结束快捷键，撂在这里就行
+
+function notifyGameStopped(message) {
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send('pet:gameStopped', {
+      message: message || '已退出答题模式。',
+    });
+    chatWindow.focus();
+  }
+}
+
+function setMainPetHidden(hidden) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (hidden) {
+    if (mainWindow.isVisible()) mainWindow.hide();
+  } else if (!mainWindow.isVisible()) {
+    if (typeof mainWindow.showInactive === 'function') mainWindow.showInactive();
+    else mainWindow.show();
+  }
+}
+
+function wireGamePetNotifier() {
+  setPetNotifier((kind, extra = {}) => {
+    const payload = { kind, ts: Date.now(), source: 'game-quiz', ...extra };
+    if (kind === 'game_play_start') {
+      setMainPetHidden(true);
+    } else if (kind === 'game_play_end') {
+      setMainPetHidden(false);
+    }
+    for (const win of [mainWindow, chatWindow]) {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('pet:event', payload);
+      }
+    }
+  });
+}
+
+function stopGameQuizFromChord() {
+  if (!isGameActive()) return;
+  const result = stopGame();
+  notifyGameStopped(result.message);
+}
+
+function registerGameStopChord() {
+  const okS = globalShortcut.register('CommandOrControl+S', () => {
+    lastChordS = Date.now();
+    if (lastChordS - lastChordG <= CHORD_MS) stopGameQuizFromChord();
+  });
+  const okG = globalShortcut.register('CommandOrControl+G', () => {
+    lastChordG = Date.now();
+    if (lastChordG - lastChordS <= CHORD_MS) stopGameQuizFromChord();
+  });
+  if (!okS || !okG) {
+    console.warn('[bili-pet] failed to register ⌘S+G game-stop chord');
+  }
+}
 
 function registerChatShortcut() {
   const ok = globalShortcut.register('CommandOrControl+C', () => {
@@ -509,6 +574,9 @@ function openChatWindow() {
   chatWindow.loadFile(path.join(__dirname, 'chat', 'chat.html'));
   chatWindow.on('closed', () => {
     chatWindow = null;
+    if (isGameActive()) {
+      stopGame();
+    }
   });
 
   return { ok: true, opened: true };
@@ -840,6 +908,26 @@ ipcMain.handle('pet:openNotesPage', () => openNotesWindow());
 
 ipcMain.handle('pet:openChatPage', () => openChatWindow());
 
+ipcMain.handle('pet:gameAnswer', (_event, payload = {}) => {
+  const choice = payload?.choice ?? payload?.index;
+  const result = answerGame(choice);
+  return {
+    ok: Boolean(result?.ok),
+    correct: Boolean(result?.correct),
+    feedback: result?.feedback || '',
+    error: result?.error || null,
+    gameUi: result?.gameUi || null,
+    autoClose: Boolean(result?.autoClose),
+    endMessage: result?.endMessage || '',
+    won: Boolean(result?.won),
+  };
+});
+
+ipcMain.handle('pet:gameStop', () => {
+  const result = stopGame();
+  return result;
+});
+
 ipcMain.handle('pet:goHome', (_event, opts) => goHome(opts || {}));
 
 
@@ -944,6 +1032,21 @@ ipcMain.handle('pet:chat', async (_event, payload = {}) => {
 
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const question = lastUser?.content || '';
+
+  try {
+    const gameResult = await tryHandleGameChat(question, currentVideoMeta());
+    if (gameResult?.handled) {
+      return {
+        ok: true,
+        text: gameResult.message || '',
+        sources: [],
+        game: true,
+        gameUi: gameResult.gameUi || null,
+      };
+    }
+  } catch (err) {
+    console.warn('[bili-pet] game chat failed:', err.message || err);
+  }
 
   try {
     const courseResult = await tryHandleCourseChat(question, currentVideoMeta(), {
@@ -1184,8 +1287,10 @@ if (gotTheLock) {
     });
 
     createWindow();
+    wireGamePetNotifier();
     registerStopChord();
     registerChatShortcut();
+    registerGameStopChord();
 
     notesOrganizer = createNotesOrganizer({
       onStatus(status) {
@@ -1261,6 +1366,3 @@ if (gotTheLock) {
   });
 }
 //以上几个全是笔记函数，建议AI维护，我已经不知道动什么了
-//以上几个全是笔记函数，建议AI维护，我已经不知道动什么了
-
-

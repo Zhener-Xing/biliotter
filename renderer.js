@@ -53,6 +53,7 @@ let baseAnim = 'wait';
 let pointing = false;
 let sequencePlaying = false;
 let syncBuffering = false;
+let gameDance = false;
 let frameIndex = 0;
 let frameTimer = null;
 let currentSrc = '';
@@ -116,6 +117,7 @@ function applyDanceFrame(step) {
 
 function startDanceBuffer() {
   if (!petSprite || syncBuffering) return;
+  if (gameDance) stopGameDance();
   syncBuffering = true;
   pointing = false;
   sequencePlaying = false;
@@ -133,11 +135,33 @@ function stopDanceBuffer() {
   syncBuffering = false;
   stopFrameLoop();
   clearDanceOffset();
-  applyBaseAnim();
+  if (!gameDance) applyBaseAnim();
+}
+
+function startGameDance() {
+  if (!petSprite || gameDance) return;
+  gameDance = true;
+  pointing = false;
+  sequencePlaying = false;
+  stopFrameLoop();
+  frameIndex = 0;
+  applyDanceFrame(DANCE_BUFFER[0]);
+  frameTimer = setInterval(() => {
+    frameIndex = (frameIndex + 1) % DANCE_BUFFER.length;
+    applyDanceFrame(DANCE_BUFFER[frameIndex]);
+  }, DANCE_FRAME_MS);
+}
+
+function stopGameDance() {
+  if (!gameDance) return;
+  gameDance = false;
+  stopFrameLoop();
+  clearDanceOffset();
+  if (!syncBuffering) applyBaseAnim();
 }
 
 function applyBaseAnim() {
-  if (syncBuffering) return;
+  if (syncBuffering || gameDance) return;
   pointing = false;
   sequencePlaying = false;
   clearDanceOffset();
@@ -148,11 +172,11 @@ function setWatching(watching) {
   const next = watching ? 'watch' : 'wait';
   if (baseAnim === next) return;
   baseAnim = next;
-  if (!syncBuffering && !pointing && !sequencePlaying) applyBaseAnim();
+  if (!syncBuffering && !gameDance && !pointing && !sequencePlaying) applyBaseAnim();
 }
 
 function playSequence(frames, loops = 1) {
-  if (!petSprite || !frames?.length || sequencePlaying || syncBuffering) return;
+  if (!petSprite || !frames?.length || sequencePlaying || syncBuffering || gameDance) return;
   pointing = false;
   sequencePlaying = true;
   stopFrameLoop();
@@ -175,7 +199,7 @@ function playSequence(frames, loops = 1) {
 }
 
 function playPointOnce() {
-  if (!petSprite || pointing || sequencePlaying || syncBuffering) return;
+  if (!petSprite || pointing || sequencePlaying || syncBuffering || gameDance) return;
   pointing = true;
   stopFrameLoop();
   const frames = ANIM.point;
@@ -196,7 +220,7 @@ let lastQuestionAt = 0;
 const QUESTION_COOLDOWN_MS = 4500;
 function playQuestionOnce() {
   const now = Date.now();
-  if (syncBuffering || sequencePlaying || now - lastQuestionAt < QUESTION_COOLDOWN_MS) {
+  if (syncBuffering || gameDance || sequencePlaying || now - lastQuestionAt < QUESTION_COOLDOWN_MS) {
     return;
   }
   lastQuestionAt = now;
@@ -205,7 +229,7 @@ function playQuestionOnce() {
 }
 
 function playAnnoyedOnce() {
-  if (syncBuffering) return;
+  if (syncBuffering || gameDance) return;
   playSfx('assets/noise/go-off.mp3');
   playSequence(ANIM.annoyed, 1);
 }
@@ -220,7 +244,7 @@ async function goHome() {
 
 function handlePetClick() {
   // 切号/登录同步中：跳舞占住交互，避免打开旧账号知识库
-  if (syncBuffering) return;
+  if (syncBuffering || gameDance) return;
   if (clickTimer) {
     clearTimeout(clickTimer);
     clickTimer = null;
@@ -229,7 +253,7 @@ function handlePetClick() {
   }
   clickTimer = setTimeout(() => {
     clickTimer = null;
-    if (syncBuffering) return;
+    if (syncBuffering || gameDance) return;
     openNotesPage();
   }, DOUBLE_CLICK_MS);
 }
@@ -356,6 +380,19 @@ function handleEvent(payload) {
     case 'account_mismatch':
       setWatching(false);
       if (payload.status === 'mismatch') playQuestionOnce();
+      break;
+
+    case 'game_generating':
+      startGameDance();
+      break;
+
+    case 'game_generating_end':
+    case 'game_play_start':
+      stopGameDance();
+      break;
+
+    case 'game_play_end':
+      stopGameDance();
       break;
 
     default:
