@@ -1,19 +1,22 @@
 {
   "name": "bili-pet",
   "version": "1.0.0",
-  "description": "a desktop study pet",
+  "description": "Desktop study pet for Bilibili learning",
   "main": "canva.js",
+  "author": "BiliOtter",
+  "license": "ISC",
+  "type": "commonjs",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/start.js",
     "test": "node scripts/verify-sync-local.js",
+    "pack:ext": "node scripts/pack-extension.js",
+    "pack:app": "node scripts/pack-desktop.js",
+    "pack": "npm run pack:ext && npm run pack:app",
     "cloud-api": "npm --prefix cloud-api start",
     "cloud-api:install": "npm --prefix cloud-api install"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
+  "devDependencies": {
     "electron": "^43.2.0"
   }
 }

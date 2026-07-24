@@ -24,3 +24,4 @@ assets/_preview/
 .env.local
 cloud-api/node_modules/
 cloud-api/.env
+dist/

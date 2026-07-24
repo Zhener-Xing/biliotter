@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const {
   setOnLocalWriteHook,
   hasPendingSync,
@@ -20,8 +19,11 @@ const {
 } = require('./notes-db');
 const { setAccountOpsReady, isAccountOpsReady, setForeignPurgeActive } = require('./session-gate');
 const { getBiliCookieHeader } = require('./bili-web-api');
+const { dataPath } = require('./paths');
 
-const TOKEN_FILE = path.join(__dirname, '.bili-pet-cloud-token.json');
+function tokenFile() {
+  return dataPath('.bili-pet-cloud-token.json');
+}
 const PULL_INTERVAL_MS = 30_000;
 const PUSH_DEBOUNCE_MS = 1500;
 const QUIT_PUSH_TIMEOUT_MS = 12_000;
@@ -56,7 +58,7 @@ function cloudEnabled() {
 
 function tokenPathForUid(uid) {
   const id = String(uid || '').trim();
-  return path.join(__dirname, `.bili-pet-cloud-token-${id}.json`);
+  return dataPath(`.bili-pet-cloud-token-${id}.json`);
 }
 
 function readTokenFile(filePath) {
@@ -90,7 +92,7 @@ function loadTokenForUid(uid) {
   if (!id) return null;
   const perUid = readTokenFile(tokenPathForUid(id));
   if (perUid) return perUid;
-  const legacy = readTokenFile(TOKEN_FILE);
+  const legacy = readTokenFile(tokenFile());
   if (legacy?.uid === id) {
     try {
       writeTokenFile(tokenPathForUid(id), legacy);
@@ -106,7 +108,7 @@ function saveTokenForUid(session) {
   const uid = String(session?.uid || '').trim();
   if (!uid || !session?.token) return null;
   writeTokenFile(tokenPathForUid(uid), session);
-  writeTokenFile(TOKEN_FILE, session);
+  writeTokenFile(tokenFile(), session);
   return session;
 }
 
@@ -119,10 +121,10 @@ function clearTokenForUid(uid) {
   } catch {
     /* ignore */
   }
-  const active = readTokenFile(TOKEN_FILE);
+  const active = readTokenFile(tokenFile());
   if (active?.uid === id) {
     try {
-      if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE);
+      if (fs.existsSync(tokenFile())) fs.unlinkSync(tokenFile());
     } catch {
       /* ignore */
     }
@@ -135,7 +137,7 @@ function loadToken() {
     const perUid = loadTokenForUid(active);
     if (perUid) return perUid;
   }
-  return readTokenFile(TOKEN_FILE);
+  return readTokenFile(tokenFile());
 }
 
 function saveToken(session) {
@@ -143,11 +145,11 @@ function saveToken(session) {
 }
 
 function clearToken() {
-  const active = readTokenFile(TOKEN_FILE);
+  const active = readTokenFile(tokenFile());
   if (active?.uid) clearTokenForUid(active.uid);
   else {
     try {
-      if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE);
+      if (fs.existsSync(tokenFile())) fs.unlinkSync(tokenFile());
     } catch {
       /* ignore */
     }
@@ -724,7 +726,7 @@ async function onAccountReady({
   const existing = loadToken();
   if (existing?.uid && existing.uid !== id) {
     try {
-      if (fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE);
+      if (fs.existsSync(tokenFile())) fs.unlinkSync(tokenFile());
     } catch {
       /* ignore */
     }
@@ -853,7 +855,9 @@ function sweepOrphanLocalStores() {
 }
 
 module.exports = {
-  TOKEN_FILE,
+  get TOKEN_FILE() {
+    return tokenFile();
+  },
   FIRST_PULL_TIMEOUT_MS,
   startCloudSync,
   stopCloudSync,

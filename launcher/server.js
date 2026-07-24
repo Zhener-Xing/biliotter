@@ -23,7 +23,7 @@ const {
   listStudyActivity,
   getStudyDay,
   getActiveUid,
-  ASSETS_DIR,
+  getAssetsDir,
 } = require('../notes-db');
 const { generateCourseMindmap } = require('../course-mindmap');
 const { loadAccount } = require('../account-bind');
@@ -205,8 +205,9 @@ async function handleApi(req, res, urlPath) {
       res.end('Forbidden');
       return;
     }
-    const full = path.normalize(path.join(ASSETS_DIR, bvid, file));
-    const root = path.normalize(ASSETS_DIR + path.sep);
+    const assetsRoot = getAssetsDir();
+    const full = path.normalize(path.join(assetsRoot, bvid, file));
+    const root = path.normalize(assetsRoot + path.sep);
     if (!full.startsWith(root) || !fs.existsSync(full) || fs.statSync(full).isDirectory()) {
       res.writeHead(404);
       res.end('Not found');

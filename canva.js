@@ -1,9 +1,17 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, protocol } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { initAppPaths, dataPath, ensureEnvFile } = require('./paths');
+const { loadEnv } = require('./load-env');
+
+// Writable data must resolve before DB / token / cookie modules load.
+app.setName('BiliOtter');
+initAppPaths(app);
+ensureEnvFile();
+loadEnv(dataPath('.env'));
+
 const { startBridgeServer } = require('./bridge-server');
 const { startHomeServer, stopHomeServer, HOME_URL } = require('./launcher/server');
-const { loadEnv } = require('./load-env');
 const { createNotesOrganizer, chatCompletion } = require('./llm');
 const { getSystemPrompt } = require('./prompts');
 const { tryHandleCourseChat } = require('./course-actions');
@@ -30,7 +38,7 @@ const {
   normalizeBvid,
   setActiveUid,
   getActiveUid,
-  ASSETS_DIR,
+  getAssetsDir,
 } = require('./notes-db');
 const {
   startCloudSync,
@@ -63,11 +71,6 @@ function rememberBiliCookieFromPayload(payload) {
     payload?.cookie ||
     payload?.account?.cookieHeader ||
     '';
-  // #region agent log
-  if (payload?.kind === 'extension_heartbeat' || payload?.kind === 'account_hello' || payload?.kind === 'account_login' || cookie) {
-    fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'D',location:'canva.js:rememberBiliCookieFromPayload',message:'bridge cookie payload',data:{kind:String(payload?.kind||''),cookieOk:payload?.cookieOk??null,hasCookieHeader:Boolean(cookie),cookieHasCsrf:/(?:^|;\s*)bili_jct=/.test(String(cookie)),cookieHasSess:/(?:^|;\s*)SESSDATA=/.test(String(cookie)),uid:String(payload?.account?.uid||payload?.uid||'')},timestamp:Date.now()})}).catch(()=>{});
-  }
-  // #endregion
   if (cookie) setBiliCookieHeader(cookie);
 }
 const STUDY_SWITCH_REASONS = new Set([
@@ -92,8 +95,6 @@ let accountOpChain = Promise.resolve();
 let accountOpSeq = 0;
 /** Prevent heartbeat from restarting an in-flight first-pull for the same uid. */
 let accountReadyInFlightUid = null;
-
-loadEnv(path.join(__dirname, '.env'));
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -123,13 +124,16 @@ function resolveBilinotesUrl(requestUrl) {
   const parts = u.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
   if (u.hostname !== 'asset' || parts.length < 2) return null;
   const rel = parts.map((p) => decodeURIComponent(p)).join(path.sep);
-  const full = path.normalize(path.join(ASSETS_DIR, rel));
-  const root = path.normalize(ASSETS_DIR + path.sep);
-  if (full !== path.normalize(ASSETS_DIR) && !full.startsWith(root)) return null;
+  const assetsRoot = getAssetsDir();
+  const full = path.normalize(path.join(assetsRoot, rel));
+  const root = path.normalize(assetsRoot + path.sep);
+  if (full !== path.normalize(assetsRoot) && !full.startsWith(root)) return null;
   if (!fs.existsSync(full)) return null;
   return full;
 }//拼接url，把协议地址转化为真实地址
-const PID_FILE = path.join(__dirname, '.bili-pet.pid');
+function pidFile() {
+  return dataPath('.bili-pet.pid');
+}
 
 const PET_WINDOW = { width: 160, height: 180 };
 
@@ -168,7 +172,7 @@ if (!gotTheLock) {
 
 function writePidFile() {
   try {
-    fs.writeFileSync(PID_FILE, String(process.pid), 'utf8');
+    fs.writeFileSync(pidFile(), String(process.pid), 'utf8');
   } catch (err) {
     console.error('[bili-pet] failed to write pid file:', err.message || err);
   }
@@ -176,7 +180,7 @@ function writePidFile() {
 
 function clearPidFile() {
   try {
-    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+    if (fs.existsSync(pidFile())) fs.unlinkSync(pidFile());
   } catch {
   }
 }//清除PID
@@ -451,12 +455,6 @@ function updateNoteContext(payload) {
       ''
   ).trim();
   const switchedBvid = Boolean(bvid && prevBvid && bvid !== prevBvid);
-
-  // #region agent log
-  if (kind === 'session_meta' || kind === 'progress' || kind === 'heartbeat' || fullSubtitle || transcript) {
-    fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'G',location:'canva.js:updateNoteContext',message:'noteContext update',data:{kind,bvid,switchedBvid,fullLen:fullSubtitle.length,transcriptLen:transcript.length,contextLen:contextText.length,subtitleStatus:payload.subtitleStatus||null,lineCount:payload.lineCount??null},timestamp:Date.now()})}).catch(()=>{});
-  }
-  // #endregion
 
   if (switchedBvid) {
     noteContext = { ...payload };
@@ -1616,9 +1614,6 @@ ipcMain.handle('pet:notesOrganize', async (_event, payload = {}) => {
       : latestEvent && eventBvid(latestEvent) === bvid
         ? latestEvent
         : noteContext || latestEvent;
-  // #region agent log
-  fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'H',location:'canva.js:pet:notesOrganize',message:'organize ctx selection',data:{reqBvid:bvid,ctxKind:String(ctx?.kind||''),ctxBvid:String(eventBvid(ctx)||''),noteCtxBvid:String(eventBvid(noteContext)||''),latestKind:String(latestEvent?.kind||''),latestBvid:String(eventBvid(latestEvent)||''),noteFullLen:String(noteContext?.fullSubtitleText||'').trim().length,noteTranscriptLen:String(noteContext?.transcriptText||'').trim().length,ctxFullLen:String(ctx?.fullSubtitleText||'').trim().length,ctxTranscriptLen:String(ctx?.transcriptText||'').trim().length,bodyMdLen:String(payload.bodyMd||'').trim().length,usedNoteContext:Boolean(noteContext&&eventBvid(noteContext)===bvid)},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   const result = await notesOrganizer?.organizeOnce?.({
     payload: ctx,
     bodyMd: payload.bodyMd,

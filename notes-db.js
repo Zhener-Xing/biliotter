@@ -1,18 +1,24 @@
 const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
+const { getDataRoot, dataPath } = require('./paths');
 
-const LEGACY_DB_FILE = path.join(__dirname, '.bili-pet-notes.db');
-const LEGACY_BUFFER_FILE = path.join(__dirname, '.bili-pet-notes-buffer.json');
-const ASSETS_DIR = path.join(__dirname, 'notes-assets');
-/** @deprecated use dbPathForUid / getActiveDbFile */
-const DB_FILE = LEGACY_DB_FILE;
+function getLegacyDbFile() {
+  return dataPath('.bili-pet-notes.db');
+}
+function getLegacyBufferFile() {
+  return dataPath('.bili-pet-notes-buffer.json');
+}
+function getAssetsDir() {
+  return dataPath('notes-assets');
+}
 
 const MODES = new Set(['ai', 'user', 'collab']);
 
 let db = null;
 let activeUid = null;
-let activeDbFile = LEGACY_DB_FILE;
+/** @type {string | null} */
+let activeDbFile = null;
 /** @type {null | ((info: { entityType: string, entityKey: string }) => void)} */
 let onLocalWriteHook = null;
 let suppressWriteHook = 0;
@@ -25,8 +31,8 @@ function normalizeUid(uid) {
 
 function dbPathForUid(uid) {
   const id = normalizeUid(uid);
-  if (!id) return LEGACY_DB_FILE;
-  return path.join(__dirname, `.bili-pet-notes-${id}.db`);
+  if (!id) return getLegacyDbFile();
+  return dataPath(`.bili-pet-notes-${id}.db`);
 }
 
 function getActiveUid() {
@@ -34,7 +40,7 @@ function getActiveUid() {
 }
 
 function getActiveDbFile() {
-  return activeDbFile;
+  return activeDbFile || getLegacyDbFile();
 }
 
 function setOnLocalWriteHook(fn) {
@@ -47,18 +53,18 @@ function migrateLegacyDbToUid(uid) {
   if (!id) return false;
   const target = dbPathForUid(id);
   if (fs.existsSync(target)) return false;
-  if (!fs.existsSync(LEGACY_DB_FILE)) return false;
+  if (!fs.existsSync(getLegacyDbFile())) return false;
   try {
-    fs.copyFileSync(LEGACY_DB_FILE, target);
+    fs.copyFileSync(getLegacyDbFile(), target);
     for (const suffix of ['-wal', '-shm']) {
-      const side = `${LEGACY_DB_FILE}${suffix}`;
+      const side = `${getLegacyDbFile()}${suffix}`;
       if (fs.existsSync(side)) {
         fs.copyFileSync(side, `${target}${suffix}`);
       }
     }
-    const bak = `${LEGACY_DB_FILE}.migrated-${id}`;
+    const bak = `${getLegacyDbFile()}.migrated-${id}`;
     try {
-      fs.renameSync(LEGACY_DB_FILE, bak);
+      fs.renameSync(getLegacyDbFile(), bak);
     } catch {
       /* keep legacy if rename fails */
     }
@@ -86,7 +92,7 @@ function closeNotesDb() {
 function setActiveUid(uid) {
   const next = normalizeUid(uid);
   const nextFile = dbPathForUid(next);
-  if (next && !fs.existsSync(nextFile) && fs.existsSync(LEGACY_DB_FILE)) {
+  if (next && !fs.existsSync(nextFile) && fs.existsSync(getLegacyDbFile())) {
     migrateLegacyDbToUid(next);
   }
   if (db && activeUid === next && activeDbFile === nextFile) {
@@ -142,7 +148,7 @@ function removeNoteAssetsForBvids(bvids) {
   for (const bvid of bvids || []) {
     const key = safeAssetKey(bvid);
     if (!key) continue;
-    const dir = path.join(ASSETS_DIR, key);
+    const dir = path.join(getAssetsDir(), key);
     try {
       if (fs.existsSync(dir)) {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -173,15 +179,16 @@ function hasLocalKbData() {
 function listUidDbFilesOnDisk() {
   const out = [];
   let names = [];
+  const root = getDataRoot();
   try {
-    names = fs.readdirSync(__dirname);
+    names = fs.readdirSync(root);
   } catch {
     return out;
   }
   for (const name of names) {
     const m = /^\.bili-pet-notes-(\d+)\.db$/.exec(name);
     if (!m) continue;
-    out.push({ uid: m[1], file: path.join(__dirname, name) });
+    out.push({ uid: m[1], file: path.join(root, name) });
   }
   return out;
 }
@@ -198,7 +205,7 @@ function purgeUidLocalStore(uid) {
   if (activeUid === id) {
     closeNotesDb();
     activeUid = null;
-    activeDbFile = LEGACY_DB_FILE;
+    activeDbFile = getLegacyDbFile();
   }
 
   const removedAssets = removeNoteAssetsForBvids(assetBvids);
@@ -2011,8 +2018,8 @@ function backfillBodyMd(database) {//填充笔记内容
 
 function migrateLegacyBufferOnce(database) {
   try {
-    if (!fs.existsSync(LEGACY_BUFFER_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(LEGACY_BUFFER_FILE, 'utf8'));
+    if (!fs.existsSync(getLegacyBufferFile())) return;
+    const raw = JSON.parse(fs.readFileSync(getLegacyBufferFile(), 'utf8'));
     if (!raw || typeof raw !== 'object') return;
 
     const upsert = database.prepare(`
@@ -2048,8 +2055,8 @@ function migrateLegacyBufferOnce(database) {
     }
 
     if (migrated > 0) {
-      const bak = `${LEGACY_BUFFER_FILE}.migrated`;
-      fs.renameSync(LEGACY_BUFFER_FILE, bak);
+      const bak = `${getLegacyBufferFile()}.migrated`;
+      fs.renameSync(getLegacyBufferFile(), bak);
       console.log(`[bili-pet] migrated ${migrated} notes from JSON buffer → SQLite`);
     }
   } catch (err) {
@@ -2239,7 +2246,7 @@ function deleteNoteDoc(bvid) {
       database.prepare('DELETE FROM note_chunks WHERE bvid = ?').run(key);
       return database.prepare('DELETE FROM cornell_notes WHERE bvid = ?').run(key);
     });
-    const dir = path.join(ASSETS_DIR, safeAssetKey(key));
+    const dir = path.join(getAssetsDir(), safeAssetKey(key));
     if (fs.existsSync(dir)) {
       try {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -2258,12 +2265,12 @@ function saveNoteAsset(bvid, { bytes, ext = 'png', mime = 'image/png' } = {}) {
     throw new Error('无效的图片数据');
   }
   const safeExt = String(ext || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
-  const dir = path.join(ASSETS_DIR, key);
+  const dir = path.join(getAssetsDir(), key);
   fs.mkdirSync(dir, { recursive: true });
   const name = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${safeExt}`;
   const filePath = path.join(dir, name);
   const resolved = path.normalize(filePath);
-  const root = path.normalize(ASSETS_DIR + path.sep);
+  const root = path.normalize(getAssetsDir() + path.sep);
   if (!resolved.startsWith(root)) {
     throw new Error('非法资源路径');
   }
@@ -2279,9 +2286,8 @@ function saveNoteAsset(bvid, { bytes, ext = 'png', mime = 'image/png' } = {}) {
 }
 
 module.exports = {
-  DB_FILE,
-  LEGACY_DB_FILE,
-  ASSETS_DIR,
+  getAssetsDir,
+  getLegacyDbFile,
   cornellToMarkdown,
   chunkMarkdown,
   reindexNoteChunks,

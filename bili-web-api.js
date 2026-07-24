@@ -1,13 +1,15 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const { normalizeBvid } = require('./notes-db');
+const { dataPath } = require('./paths');
 
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-const COOKIE_FILE = path.join(__dirname, '.bili-pet-bili-session.json');
+function cookieFile() {
+  return dataPath('.bili-pet-bili-session.json');
+}
 
 /** @type {string} */
 let cachedCookieHeader = '';
@@ -16,8 +18,8 @@ let cookieUpdatedAt = 0;
 
 function loadPersistedCookie() {
   try {
-    if (!fs.existsSync(COOKIE_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf8'));
+    if (!fs.existsSync(cookieFile())) return;
+    const raw = JSON.parse(fs.readFileSync(cookieFile(), 'utf8'));
     const cookie = String(raw?.cookieHeader || '').trim();
     if (!cookie) return;
     cachedCookieHeader = cookie;
@@ -30,7 +32,7 @@ function loadPersistedCookie() {
 function persistCookie() {
   try {
     fs.writeFileSync(
-      COOKIE_FILE,
+      cookieFile(),
       `${JSON.stringify(
         {
           cookieHeader: cachedCookieHeader,
@@ -46,30 +48,32 @@ function persistCookie() {
   }
 }
 
-loadPersistedCookie();
+// Deferred until first cookie access so Electron can initAppPaths first.
+let cookieHydrated = false;
+function ensureCookieHydrated() {
+  if (cookieHydrated) return;
+  cookieHydrated = true;
+  loadPersistedCookie();
+}
 
 function setBiliCookieHeader(header) {
+  ensureCookieHydrated();
   const next = String(header || '').trim();
   if (!next) return false;
   // Avoid clobbering a complete cookie with an incomplete one
   const nextHasCsrf = /(?:^|;\s*)bili_jct=/.test(next);
   const prevHasCsrf = /(?:^|;\s*)bili_jct=/.test(cachedCookieHeader);
   if (cachedCookieHeader && prevHasCsrf && !nextHasCsrf) {
-    // #region agent log
-    fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'C',location:'bili-web-api.js:setBiliCookieHeader',message:'rejected incomplete cookie',data:{prevHasCsrf,nextHasCsrf,nextLen:next.length,prevLen:cachedCookieHeader.length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     return false;
   }
   cachedCookieHeader = next;
   cookieUpdatedAt = Date.now();
   persistCookie();
-  // #region agent log
-  fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'C',location:'bili-web-api.js:setBiliCookieHeader',message:'cookie accepted',data:{hasCsrf:nextHasCsrf,hasSess:/SESSDATA=/.test(next),len:next.length},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   return true;
 }
 
 function getBiliCookieHeader() {
+  ensureCookieHydrated();
   return cachedCookieHeader;
 }
 

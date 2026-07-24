@@ -1,7 +1,9 @@
 const fs = require('fs');
-const path = require('path');
+const { dataPath } = require('./paths');
 
-const ACCOUNT_FILE = path.join(__dirname, '.bili-pet-account.json');
+function accountFile() {
+  return dataPath('.bili-pet-account.json');
+}
 
 let cache = null;
 
@@ -25,8 +27,8 @@ function emptyAccount() {
 function loadAccount() {
   if (cache) return cache;
   try {
-    if (fs.existsSync(ACCOUNT_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(ACCOUNT_FILE, 'utf8'));
+    if (fs.existsSync(accountFile())) {
+      const raw = JSON.parse(fs.readFileSync(accountFile(), 'utf8'));
       const activeUid =
         normalizeUid(raw.activeUid) || normalizeUid(raw.boundUid);
       cache = {
@@ -55,7 +57,7 @@ function saveAccount(patch = {}) {
     cache.boundUid = null;
   }
   try {
-    fs.writeFileSync(ACCOUNT_FILE, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(accountFile(), `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
   } catch (err) {
     console.warn('[bili-pet] account save failed:', err.message || err);
   }
@@ -246,7 +248,9 @@ function handleAccountPayload(payload) {
 }
 
 module.exports = {
-  ACCOUNT_FILE,
+  get ACCOUNT_FILE() {
+    return accountFile();
+  },
   normalizeUid,
   loadAccount,
   saveAccount,
