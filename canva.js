@@ -19,8 +19,17 @@ const {
   addSwitchCount,
   addDistractCount,
   normalizeBvid,
+  setActiveUid,
   ASSETS_DIR,
 } = require('./notes-db');
+const {
+  startCloudSync,
+  onAccountReady,
+  handleAuthCookiePayload,
+  flushBeforeQuit,
+  stopCloudSync,
+  cloudEnabled,
+} = require('./cloud-sync');
 
 const STUDY_SWITCH_REASONS = new Set([
   'pagehide',
@@ -32,7 +41,9 @@ const STUDY_SWITCH_REASONS = new Set([
 
 let studyClock = null;
 const STUDY_CREDIT_CAP_MS = 10_000;
-let lastAccountRejectKey = '';
+/** Serialize account switch / bind so overlapping hellos cannot clobber the active DB. */
+let accountOpChain = Promise.resolve();
+let accountOpSeq = 0;
 
 loadEnv(path.join(__dirname, '.env'));
 
@@ -139,15 +150,26 @@ function quitAfterClosingSound() {
     app.quit();
   };
 
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  const runFinish = async () => {
+    try {
+      await flushBeforeQuit();
+    } catch (err) {
+      console.warn('[bili-pet] quit flush failed:', err.message || err);
+    }
     finish();
+  };
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    void runFinish();
     return;
   }
 
-  const fallback = setTimeout(finish, 5000);
+  const fallback = setTimeout(() => {
+    void runFinish();
+  }, 5000);
   ipcMain.once('pet:closing-finished', () => {
     clearTimeout(fallback);
-    finish();
+    void runFinish();
   });
   mainWindow.webContents.send('pet:closing');
 }//在播放完音频后终止进程函数
@@ -607,10 +629,134 @@ function recordStudyActivity(payload) {
   }
 }//专注力函数，后续需要修改容忍度，先放在这里后期修
 
+async function ensureAccountLocalStore(gate, payload = {}) {
+  if (!gate?.ok || !gate.uid) return;
+  // logged_in 会刷很多次，不能每次都 pull/换库；只在首次绑定或真正切号时同步
+  if (gate.status !== 'auto_bound' && gate.status !== 'switched') {
+    return;
+  }
+
+  const seq = ++accountOpSeq;
+  const switched = gate.status === 'switched';
+  const cookieHeader =
+    payload.cookieHeader ||
+    payload.account?.cookieHeader ||
+    null;
+  const uid = gate.uid;
+  const prevUid = gate.prevUid || null;
+
+  const run = async () => {
+    if (seq !== accountOpSeq) return;
+
+    if (switched) {
+      flushStudyClock();
+      studyClock = null;
+      noteContext = null;
+      latestEvent = null;
+    }
+
+    // 主进程先广播，保证宠物立刻开跳舞（不依赖 cloud-sync 内部时序）
+    broadcastPetEvent(
+      {
+        v: 1,
+        source: 'bili-pet-sync',
+        kind: 'sync_state',
+        status: switched ? 'switching' : 'syncing_login',
+        ts: Date.now(),
+        uid,
+        prevUid,
+        switched,
+        cloudEnabled: cloudEnabled(),
+      },
+      { touchLatest: false }
+    );
+
+    const result = await onAccountReady({
+      uid,
+      prevUid,
+      switched,
+      cookieHeader,
+      opSeq: seq,
+      isStale: () => seq !== accountOpSeq,
+    });
+
+    if (seq !== accountOpSeq) return;
+
+    broadcastPetEvent(
+      {
+        v: 1,
+        source: 'bili-pet',
+        kind: 'account_switched',
+        ts: Date.now(),
+        uid,
+        prevUid,
+        bindStatus: gate.status,
+        boundUid: uid,
+        ok: Boolean(result?.ok),
+        switched,
+      },
+      { touchLatest: false }
+    );
+
+    // 知识库页若已打开：硬刷新，避免只靠渲染进程事件漏刷仍显示上一账号
+    broadcastPetEvent(
+      {
+        v: 1,
+        source: 'bili-pet',
+        kind: 'kb_account_ready',
+        ts: Date.now(),
+        uid,
+        prevUid,
+        switched,
+        ok: Boolean(result?.ok),
+      },
+      { touchLatest: false }
+    );
+    if (homeWindow && !homeWindow.isDestroyed()) {
+      try {
+        homeWindow.reload();
+      } catch (err) {
+        console.warn('[bili-pet] home reload after switch failed:', err?.message || err);
+      }
+    }
+    if (notesWindow && !notesWindow.isDestroyed()) {
+      try {
+        notesWindow.reload();
+      } catch (err) {
+        console.warn('[bili-pet] notes reload after switch failed:', err?.message || err);
+      }
+    }
+  };
+
+  accountOpChain = accountOpChain.then(run, run).catch((err) => {
+    console.warn('[bili-pet] account store op failed:', err?.message || err);
+  });
+  await accountOpChain;
+}
+
 function onBridgeEvent(payload) {
   if (!payload || typeof payload !== 'object') return;
 
   const kind = String(payload.kind || '');
+
+  if (kind === 'account_auth_cookie') {
+    void handleAuthCookiePayload(payload).then((result) => {
+      broadcastPetEvent(
+        {
+          v: 1,
+          source: 'bili-pet-sync',
+          kind: 'account_auth_result',
+          ts: Date.now(),
+          ok: Boolean(result?.ok),
+          uid: result?.uid || null,
+          error: result?.error || null,
+        },
+        { touchLatest: false }
+      );
+    });
+    return;
+  }
+
   const gate = handleAccountPayload(payload);
 
   if (kind === 'account_login' || kind === 'account_logout' || kind === 'account_hello') {
@@ -621,38 +767,46 @@ function onBridgeEvent(payload) {
     const event = {
       ...payload,
       bindStatus: gate.status,
-      boundUid: gate.account?.boundUid || null,
+      boundUid: gate.account?.activeUid || gate.account?.boundUid || null,
+      activeUid: gate.account?.activeUid || null,
+      prevUid: gate.prevUid || null,
       ok: gate.ok,
     };
     broadcastPetEvent(event, { touchLatest: false });
     console.log(
       `[bili-pet] account ${gate.status}`,
-      gate.uid || gate.account?.boundUid || '(none)'
+      gate.uid || gate.account?.activeUid || '(none)'
     );
+
+    if (gate.ok && gate.uid && (gate.status === 'auto_bound' || gate.status === 'switched')) {
+      void ensureAccountLocalStore(gate, payload);
+    } else if (gate.ok && gate.status === 'logged_in' && payload.cookieHeader) {
+      // 同账号重复 hello：只刷新 JWT，不换库、不全量 pull
+      void handleAuthCookiePayload(payload);
+    }
     return;
   }
 
   if (!gate.ok) {
-    const rejectKey = `${gate.status}:${gate.uid || ''}:${gate.account?.boundUid || ''}`;
-    if (rejectKey !== lastAccountRejectKey) {
-      lastAccountRejectKey = rejectKey;
-      broadcastPetEvent(
-        {
-          v: 1,
-          source: 'bili-pet',
-          kind: 'account_mismatch',
-          ts: Date.now(),
-          status: gate.status,
-          uid: gate.uid,
-          boundUid: gate.account?.boundUid || null,
-          account: payload.account || { uid: gate.uid, loggedIn: false },
-        },
-        { touchLatest: false }
-      );
-    }
+    broadcastPetEvent(
+      {
+        v: 1,
+        source: 'bili-pet',
+        kind: 'account_logged_out',
+        ts: Date.now(),
+        status: gate.status,
+        uid: gate.uid,
+        boundUid: gate.account?.activeUid || gate.account?.boundUid || null,
+        account: payload.account || { uid: gate.uid, loggedIn: false },
+      },
+      { touchLatest: false }
+    );
     return;
   }
-  lastAccountRejectKey = '';
+
+  if (gate.status === 'auto_bound' || gate.status === 'switched') {
+    void ensureAccountLocalStore(gate, payload);
+  }
 
   if (gate.status === 'auto_bound') {
     broadcastPetEvent(
@@ -678,7 +832,7 @@ function onBridgeEvent(payload) {
     console.warn('[bili-pet] study activity record failed', err);
   }
   void notesOrganizer?.maybeHandle(payload);
-}//账号绑定，但是数据库还在本地，空壳子函数，要改
+}//账号切换 + 本地分库 + 云同步编排（切号串行，避免 B/A 互相踩库）
 
 ipcMain.handle('pet:getLatest', () => latestEvent);
 
@@ -1013,15 +1167,22 @@ if (gotTheLock) {
     writePidFile();
     {
       const acc = loadAccount();
-      if (acc.boundUid) {
+      const uid = acc.activeUid || acc.boundUid;
+      if (uid) {
+        setActiveUid(uid);
         console.log(
-          `[bili-pet] bound Bilibili uid=${acc.boundUid}` +
+          `[bili-pet] active Bilibili uid=${uid}` +
             (acc.sessionLoggedIn ? ' (session logged in)' : ' (waiting browser login)')
         );
       } else {
-        console.log('[bili-pet] no bound account yet — will auto-bind on first Bilibili login');
+        console.log('[bili-pet] no active account yet — will bind on first Bilibili login');
       }
     }
+
+    startCloudSync({
+      onBroadcast: (event) => broadcastPetEvent(event, { touchLatest: false }),
+    });
+
     createWindow();
     registerStopChord();
     registerChatShortcut();
@@ -1082,6 +1243,7 @@ if (gotTheLock) {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    stopCloudSync();
     closeNotesDb();
     clearPidFile();
   });
@@ -1099,3 +1261,6 @@ if (gotTheLock) {
   });
 }
 //以上几个全是笔记函数，建议AI维护，我已经不知道动什么了
+//以上几个全是笔记函数，建议AI维护，我已经不知道动什么了
+
+

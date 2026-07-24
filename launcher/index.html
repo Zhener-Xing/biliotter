@@ -3318,6 +3318,71 @@
           window.biliPet.onOpenHomeNote(openHomeNoteFromBridge);
         }
 
+        function refreshKnowledgeBaseUi(toastMsg) {
+          try {
+            if (typeof closeNoteView === "function") closeNoteView();
+          } catch (_) {
+            /* ignore */
+          }
+          try {
+            setMode("welcome");
+            setSideView("notes");
+          } catch (_) {
+            /* ignore */
+          }
+          void loadList();
+          void loadCourses();
+          void loadActivityHeatmap();
+          if (toastMsg) showToast(toastMsg);
+        }
+
+        if (window.biliPet && typeof window.biliPet.onEvent === "function") {
+          window.biliPet.onEvent(function (payload) {
+            const kind = String((payload && payload.kind) || "");
+            const status = String((payload && payload.status) || "");
+            const reason = String((payload && payload.reason) || "");
+            const bindStatus = String((payload && payload.bindStatus) || "");
+
+            // 切号/登录同步中：先别刷列表
+            if (
+              (kind === "account_login" || kind === "account_hello") &&
+              (bindStatus === "switched" || bindStatus === "auto_bound")
+            ) {
+              showToast("正在同步知识库…");
+              return;
+            }
+            if (
+              kind === "sync_state" &&
+              (status === "switching" ||
+                status === "syncing_login" ||
+                (status === "pulling" &&
+                  (reason === "switch_pull" || reason === "login_pull")))
+            ) {
+              showToast("正在同步知识库…");
+              return;
+            }
+
+            if (
+              kind === "account_switched" ||
+              kind === "kb_account_ready" ||
+              (kind === "sync_state" && status === "account_switched")
+            ) {
+              refreshKnowledgeBaseUi("已切换账号知识库");
+              return;
+            }
+
+            if (
+              kind === "sync_state" &&
+              status === "ready" &&
+              (reason === "local_only" ||
+                reason === "waiting_auth" ||
+                reason === "waiting_auth_uid_match")
+            ) {
+              refreshKnowledgeBaseUi("已切换账号知识库");
+            }
+          });
+        }
+
         try {
           const bootBvid = new URLSearchParams(window.location.search).get("bvid");
           if (bootBvid) {

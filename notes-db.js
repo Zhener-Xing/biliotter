@@ -2,13 +2,102 @@ const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
-const DB_FILE = path.join(__dirname, '.bili-pet-notes.db');
+const LEGACY_DB_FILE = path.join(__dirname, '.bili-pet-notes.db');
 const LEGACY_BUFFER_FILE = path.join(__dirname, '.bili-pet-notes-buffer.json');
 const ASSETS_DIR = path.join(__dirname, 'notes-assets');
+/** @deprecated use dbPathForUid / getActiveDbFile */
+const DB_FILE = LEGACY_DB_FILE;
 
 const MODES = new Set(['ai', 'user', 'collab']);
 
 let db = null;
+let activeUid = null;
+let activeDbFile = LEGACY_DB_FILE;
+/** @type {null | ((info: { entityType: string, entityKey: string }) => void)} */
+let onLocalWriteHook = null;
+let suppressWriteHook = 0;
+
+function normalizeUid(uid) {
+  const s = String(uid ?? '').trim();
+  if (!s || s === '0') return null;
+  return s;
+}
+
+function dbPathForUid(uid) {
+  const id = normalizeUid(uid);
+  if (!id) return LEGACY_DB_FILE;
+  return path.join(__dirname, `.bili-pet-notes-${id}.db`);
+}
+
+function getActiveUid() {
+  return activeUid;
+}
+
+function getActiveDbFile() {
+  return activeDbFile;
+}
+
+function setOnLocalWriteHook(fn) {
+  onLocalWriteHook = typeof fn === 'function' ? fn : null;
+}
+
+function migrateLegacyDbToUid(uid) {
+  if (process.env.BILI_PET_SKIP_LEGACY_MIGRATE === '1') return false;
+  const id = normalizeUid(uid);
+  if (!id) return false;
+  const target = dbPathForUid(id);
+  if (fs.existsSync(target)) return false;
+  if (!fs.existsSync(LEGACY_DB_FILE)) return false;
+  try {
+    fs.copyFileSync(LEGACY_DB_FILE, target);
+    for (const suffix of ['-wal', '-shm']) {
+      const side = `${LEGACY_DB_FILE}${suffix}`;
+      if (fs.existsSync(side)) {
+        fs.copyFileSync(side, `${target}${suffix}`);
+      }
+    }
+    const bak = `${LEGACY_DB_FILE}.migrated-${id}`;
+    try {
+      fs.renameSync(LEGACY_DB_FILE, bak);
+    } catch {
+      /* keep legacy if rename fails */
+    }
+    console.log(`[bili-pet] migrated legacy notes db → uid=${id}`);
+    return true;
+  } catch (err) {
+    console.warn('[bili-pet] legacy db migrate failed:', err.message || err);
+    return false;
+  }
+}
+
+function closeNotesDb() {
+  if (!db) return;
+  try {
+    db.close();
+  } catch {
+  }
+  db = null;
+}
+
+/**
+ * Switch local SQLite file to this Bilibili uid.
+ * Call after account switch / first bind. Migrates legacy single-file DB once.
+ */
+function setActiveUid(uid) {
+  const next = normalizeUid(uid);
+  const nextFile = dbPathForUid(next);
+  if (next && !fs.existsSync(nextFile) && fs.existsSync(LEGACY_DB_FILE)) {
+    migrateLegacyDbToUid(next);
+  }
+  if (db && activeUid === next && activeDbFile === nextFile) {
+    return { ok: true, uid: next, dbFile: nextFile, switched: false };
+  }
+  closeNotesDb();
+  activeUid = next;
+  activeDbFile = nextFile;
+  getDb();
+  return { ok: true, uid: next, dbFile: nextFile, switched: true };
+}
 
 function normalizeMode(mode) {
   const m = String(mode || '').trim().toLowerCase();
@@ -59,9 +148,24 @@ function ensureColumn(database, table, column, typeSql) {
   database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeSql}`);
 }
 
+function ensureSyncTables(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS sync_pending (
+      entity_type TEXT NOT NULL,
+      entity_key TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (entity_type, entity_key)
+    );
+    CREATE TABLE IF NOT EXISTS local_sync_meta (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    );
+  `);
+}
+
 function getDb() {
   if (db) return db;
-  db = new DatabaseSync(DB_FILE);
+  db = new DatabaseSync(activeDbFile);
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS cornell_notes (
@@ -83,6 +187,7 @@ function getDb() {
   ensureChunkTables(db);
   ensureCourseGroupTables(db);
   ensureStudyActivityTables(db);
+  ensureSyncTables(db);
   migrateLegacyBufferOnce(db);
   backfillBodyMd(db);
   backfillAllChunksIfEmpty(db);
@@ -118,6 +223,371 @@ function ensureStudyDayRow(database, day, now = Date.now()) {
     .run(day, now);
 }
 
+function markPending(entityType, entityKey) {
+  const type = String(entityType || '').trim();
+  const key = String(entityKey || '').trim();
+  if (!type || !key) return;
+  if (suppressWriteHook > 0) return;
+  try {
+    getDb()
+      .prepare(
+        `
+        INSERT INTO sync_pending (entity_type, entity_key, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(entity_type, entity_key) DO UPDATE SET updated_at = excluded.updated_at
+      `
+      )
+      .run(type, key, Date.now());
+  } catch (err) {
+    console.warn('[bili-pet] markPending failed:', err.message || err);
+  }
+  try {
+    onLocalWriteHook?.({ entityType: type, entityKey: key });
+  } catch {
+    /* ignore */
+  }
+}
+
+function listPending() {
+  try {
+    return getDb()
+      .prepare(
+        `SELECT entity_type AS entityType, entity_key AS entityKey, updated_at AS updatedAt
+         FROM sync_pending ORDER BY updated_at ASC`
+      )
+      .all();
+  } catch {
+    return [];
+  }
+}
+
+function clearPending(keys) {
+  const rows = Array.isArray(keys) ? keys : [];
+  if (!rows.length) return;
+  const stmt = getDb().prepare(
+    'DELETE FROM sync_pending WHERE entity_type = ? AND entity_key = ?'
+  );
+  for (const row of rows) {
+    const type = String(row.entityType || row.entity_type || '').trim();
+    const key = String(row.entityKey || row.entity_key || '').trim();
+    if (type && key) stmt.run(type, key);
+  }
+}
+
+function clearAllPending() {
+  try {
+    getDb().prepare('DELETE FROM sync_pending').run();
+  } catch {
+    /* ignore */
+  }
+}
+
+function getLocalSyncMeta(key, fallback = null) {
+  try {
+    const row = getDb()
+      .prepare('SELECT value FROM local_sync_meta WHERE key = ?')
+      .get(String(key));
+    return row ? String(row.value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function setLocalSyncMeta(key, value) {
+  getDb()
+    .prepare(
+      `
+      INSERT INTO local_sync_meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `
+    )
+    .run(String(key), String(value));
+}
+
+function getCloudRevision() {
+  return Math.max(0, Number(getLocalSyncMeta('cloud_revision', '0')) || 0);
+}
+
+function setCloudRevision(rev) {
+  setLocalSyncMeta('cloud_revision', String(Math.max(0, Number(rev) || 0)));
+}
+
+function loadChunksForBvid(bvid) {
+  const key = String(bvid || '').trim();
+  if (!key) return [];
+  try {
+    return getDb()
+      .prepare(
+        `SELECT bvid, chunk_index AS chunkIndex, heading, text, updated_at AS updatedAt
+         FROM note_chunks WHERE bvid = ? ORDER BY chunk_index`
+      )
+      .all(key);
+  } catch {
+    return [];
+  }
+}
+
+function buildPendingPushPayload() {
+  const pending = listPending();
+  const notes = [];
+  const studyDays = [];
+  const courseGroups = [];
+  const courseFolders = [];
+  const courseItems = [];
+  const seenNotes = new Set();
+  const seenStudy = new Set();
+  const seenGroups = new Set();
+  const seenFolders = new Set();
+  const seenItems = new Set();
+
+  for (const p of pending) {
+    if (p.entityType === 'note' && !seenNotes.has(p.entityKey)) {
+      seenNotes.add(p.entityKey);
+      const doc = loadNoteDoc(p.entityKey);
+      if (!doc) continue;
+      notes.push({
+        bvid: doc.bvid,
+        notes: doc.notes,
+        title: doc.title,
+        sessionId: doc.sessionId,
+        updatedAt: doc.updatedAt,
+        createdAt: doc.createdAt,
+        mode: doc.mode,
+        bodyMd: doc.bodyMd,
+        revision: doc.revision,
+        chunks: loadChunksForBvid(doc.bvid),
+      });
+    } else if (p.entityType === 'study_day' && !seenStudy.has(p.entityKey)) {
+      seenStudy.add(p.entityKey);
+      const day = getStudyDay(p.entityKey);
+      if (day) studyDays.push(day);
+    } else if (p.entityType === 'course_group' && !seenGroups.has(p.entityKey)) {
+      seenGroups.add(p.entityKey);
+      const g = getCourseGroup(p.entityKey);
+      if (g) {
+        courseGroups.push({
+          id: g.id,
+          title: g.title,
+          topic: g.topic,
+          meta: g.meta,
+          mindmapMd: g.mindmapMd || '',
+          createdAt: g.createdAt,
+          updatedAt: g.updatedAt,
+        });
+      }
+    } else if (p.entityType === 'course_folder' && !seenFolders.has(p.entityKey)) {
+      seenFolders.add(p.entityKey);
+      try {
+        const row = getDb()
+          .prepare(
+            `SELECT id, group_id AS groupId, title, ord, created_at AS createdAt,
+                    updated_at AS updatedAt FROM course_group_folders WHERE id = ?`
+          )
+          .get(p.entityKey);
+        if (row) courseFolders.push(row);
+      } catch {
+        /* ignore */
+      }
+    } else if (p.entityType === 'course_item' && !seenItems.has(p.entityKey)) {
+      seenItems.add(p.entityKey);
+      const [groupId, bvid] = String(p.entityKey).split('::');
+      if (!groupId || !bvid) continue;
+      try {
+        const row = getDb()
+          .prepare(
+            `SELECT group_id AS groupId, bvid, title, ord, status, added_at AS addedAt,
+                    folder_id AS folderId
+             FROM course_group_items WHERE group_id = ? AND bvid = ?`
+          )
+          .get(groupId, bvid);
+        if (row) courseItems.push(row);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  return {
+    pending,
+    changes: { notes, studyDays, courseGroups, courseFolders, courseItems },
+  };
+}
+
+function applyRemoteChanges(changes = {}) {
+  suppressWriteHook += 1;
+  try {
+    return applyRemoteChangesInner(changes);
+  } finally {
+    suppressWriteHook = Math.max(0, suppressWriteHook - 1);
+  }
+}
+
+function applyRemoteChangesInner(changes = {}) {
+  const notes = Array.isArray(changes.notes) ? changes.notes : [];
+  const studyDays = Array.isArray(changes.studyDays) ? changes.studyDays : [];
+  const courseGroups = Array.isArray(changes.courseGroups)
+    ? changes.courseGroups
+    : [];
+  const courseFolders = Array.isArray(changes.courseFolders)
+    ? changes.courseFolders
+    : [];
+  const courseItems = Array.isArray(changes.courseItems)
+    ? changes.courseItems
+    : [];
+
+  let applied = 0;
+  for (const n of notes) {
+    const bvid = String(n.bvid || '').trim();
+    if (!bvid) continue;
+    const remoteUpdated = Number(n.updated_at ?? n.updatedAt) || 0;
+    const local = loadNoteDoc(bvid);
+    if (local && local.updatedAt > remoteUpdated) continue;
+    let notesObj = n.notes;
+    if (typeof n.notes_json === 'string') {
+      try {
+        notesObj = JSON.parse(n.notes_json);
+      } catch {
+        notesObj = null;
+      }
+    }
+    saveNoteDoc(bvid, {
+      notes: notesObj,
+      title: n.video_title ?? n.title ?? '',
+      sessionId: n.session_id ?? n.sessionId ?? null,
+      mode: n.mode || 'user',
+      bodyMd: n.body_md ?? n.bodyMd ?? '',
+    });
+    // saveNoteDoc marks pending — clear for this note after remote apply
+    clearPending([{ entityType: 'note', entityKey: bvid }]);
+    applied += 1;
+  }
+
+  for (const s of studyDays) {
+    const day = String(s.day || '').trim();
+    if (!day) continue;
+    const remoteUpdated = Number(s.updated_at ?? s.updatedAt) || 0;
+    const local = getStudyDay(day);
+    if (local && Number(local.updatedAt) > remoteUpdated) continue;
+    const database = getDb();
+    ensureStudyDayRow(database, day, remoteUpdated || Date.now());
+    database
+      .prepare(
+        `UPDATE study_days
+         SET study_ms = ?, switch_count = ?, distract_count = ?, updated_at = ?
+         WHERE day = ?`
+      )
+      .run(
+        Number(s.study_ms ?? s.studyMs) || 0,
+        Number(s.switch_count ?? s.switchCount) || 0,
+        Number(s.distract_count ?? s.distractCount) || 0,
+        remoteUpdated || Date.now(),
+        day
+      );
+    clearPending([{ entityType: 'study_day', entityKey: day }]);
+    applied += 1;
+  }
+
+  for (const g of courseGroups) {
+    const id = String(g.id || '').trim();
+    if (!id) continue;
+    const database = getDb();
+    const updatedAt = Number(g.updated_at ?? g.updatedAt) || Date.now();
+    const metaJson =
+      typeof g.meta_json === 'string'
+        ? g.meta_json
+        : JSON.stringify(g.meta || {});
+    database
+      .prepare(
+        `
+        INSERT INTO course_groups (id, title, topic, meta_json, mindmap_md, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          topic = excluded.topic,
+          meta_json = excluded.meta_json,
+          mindmap_md = excluded.mindmap_md,
+          updated_at = excluded.updated_at
+      `
+      )
+      .run(
+        id,
+        String(g.title || ''),
+        String(g.topic || ''),
+        metaJson,
+        String(g.mindmap_md ?? g.mindmapMd ?? ''),
+        Number(g.created_at ?? g.createdAt) || updatedAt,
+        updatedAt
+      );
+    clearPending([{ entityType: 'course_group', entityKey: id }]);
+    applied += 1;
+  }
+
+  for (const f of courseFolders) {
+    const id = String(f.id || '').trim();
+    const groupId = String(f.group_id ?? f.groupId ?? '').trim();
+    if (!id || !groupId) continue;
+    const updatedAt = Number(f.updated_at ?? f.updatedAt) || Date.now();
+    getDb()
+      .prepare(
+        `
+        INSERT INTO course_group_folders (id, group_id, title, ord, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          ord = excluded.ord,
+          updated_at = excluded.updated_at
+      `
+      )
+      .run(
+        id,
+        groupId,
+        String(f.title || ''),
+        Number(f.ord) || 0,
+        Number(f.created_at ?? f.createdAt) || updatedAt,
+        updatedAt
+      );
+    clearPending([{ entityType: 'course_folder', entityKey: id }]);
+    applied += 1;
+  }
+
+  for (const it of courseItems) {
+    const groupId = String(it.group_id ?? it.groupId ?? '').trim();
+    const bvid = String(it.bvid || '').trim();
+    if (!groupId || !bvid) continue;
+    getDb()
+      .prepare(
+        `
+        INSERT INTO course_group_items (group_id, bvid, title, ord, status, added_at, folder_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(group_id, bvid) DO UPDATE SET
+          title = excluded.title,
+          ord = excluded.ord,
+          status = excluded.status,
+          folder_id = excluded.folder_id
+      `
+      )
+      .run(
+        groupId,
+        bvid,
+        String(it.title || ''),
+        Number(it.ord) || 0,
+        String(it.status || 'planned'),
+        Number(it.added_at ?? it.addedAt) || Date.now(),
+        it.folder_id ?? it.folderId ?? null
+      );
+    clearPending([
+      { entityType: 'course_item', entityKey: `${groupId}::${bvid}` },
+    ]);
+    applied += 1;
+  }
+
+  return { ok: true, applied };
+}
+
+function hasPendingSync() {
+  return listPending().length > 0;
+}
+
 function addStudyMs(ms, at = Date.now()) {
   const amount = Math.max(0, Math.floor(Number(ms) || 0));
   if (!amount) return getStudyDay(dayKeyFromTs(at));
@@ -132,6 +602,7 @@ function addStudyMs(ms, at = Date.now()) {
        WHERE day = ?`
     )
     .run(amount, now, day);
+  markPending('study_day', day);
   return getStudyDay(day);
 }//获取学习日期函数
 
@@ -149,6 +620,7 @@ function addSwitchCount(n = 1, at = Date.now()) {
        WHERE day = ?`
     )
     .run(amount, now, day);
+  markPending('study_day', day);
   return getStudyDay(day);
 }
 
@@ -166,6 +638,7 @@ function addDistractCount(n = 1, at = Date.now()) {
        WHERE day = ?`
     )
     .run(amount, now, day);
+  markPending('study_day', day);
   return getStudyDay(day);
 }//增加分心函数，可以写到另一个文件去
 
@@ -508,6 +981,7 @@ function createCourseGroup({ title, topic = '', items = [], meta = null } = {}) 
         ord += 1;
       }
     });
+    markPending('course_group', id);
     return { ok: true, group: getCourseGroup(id) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -556,6 +1030,7 @@ function updateCourseGroup(id, patch = {}) {
       )
       .run(title, topic, metaJson, now, key);
 
+    markPending('course_group', key);
     return { ok: true, group: getCourseGroup(key) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -576,6 +1051,7 @@ function deleteCourseGroup(id) {
         .run(key);
       return database.prepare('DELETE FROM course_groups WHERE id = ?').run(key);
     });
+    if (info.changes > 0) markPending('course_group', key);
     return { ok: true, deleted: info.changes > 0, id: key };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -619,6 +1095,7 @@ function saveCourseMindmap(groupId, mindmapMd) {
       `
       )
       .run(md, now, key);
+    markPending('course_group', key);
     return getCourseMindmap(key);
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1547,6 +2024,7 @@ function saveNoteDoc(bvid, patch = {}) {
 
   reindexNoteChunks(key, bodyMd, { title });
 
+  markPending('note', key);
   return loadNoteDoc(key);
 }//数据更新逻辑
 
@@ -1676,17 +2154,9 @@ function saveNoteAsset(bvid, { bytes, ext = 'png', mime = 'image/png' } = {}) {
   };
 }
 
-function closeNotesDb() {
-  if (!db) return;
-  try {
-    db.close();
-  } catch {
-  }
-  db = null;
-}
-
 module.exports = {
   DB_FILE,
+  LEGACY_DB_FILE,
   ASSETS_DIR,
   cornellToMarkdown,
   chunkMarkdown,
@@ -1699,6 +2169,20 @@ module.exports = {
   listNoteDocs,
   deleteNoteDoc,
   closeNotesDb,
+  setActiveUid,
+  getActiveUid,
+  getActiveDbFile,
+  dbPathForUid,
+  setOnLocalWriteHook,
+  markPending,
+  listPending,
+  clearPending,
+  clearAllPending,
+  hasPendingSync,
+  getCloudRevision,
+  setCloudRevision,
+  buildPendingPushPayload,
+  applyRemoteChanges,
   normalizeBvid,
   listCourseGroups,
   getCourseGroup,

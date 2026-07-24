@@ -5,7 +5,9 @@
   "main": "canva.js",
   "scripts": {
     "start": "electron .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node scripts/verify-sync-local.js",
+    "cloud-api": "npm --prefix cloud-api start",
+    "cloud-api:install": "npm --prefix cloud-api install"
   },
   "keywords": [],
   "author": "",

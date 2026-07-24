@@ -13,6 +13,7 @@ function normalizeUid(uid) {
 
 function emptyAccount() {
   return {
+    activeUid: null,
     boundUid: null,
     boundAt: null,
     lastSeenUid: null,
@@ -26,8 +27,11 @@ function loadAccount() {
   try {
     if (fs.existsSync(ACCOUNT_FILE)) {
       const raw = JSON.parse(fs.readFileSync(ACCOUNT_FILE, 'utf8'));
+      const activeUid =
+        normalizeUid(raw.activeUid) || normalizeUid(raw.boundUid);
       cache = {
-        boundUid: normalizeUid(raw.boundUid),
+        activeUid,
+        boundUid: activeUid,
         boundAt: Number(raw.boundAt) || null,
         lastSeenUid: normalizeUid(raw.lastSeenUid),
         lastSeenAt: Number(raw.lastSeenAt) || null,
@@ -45,6 +49,9 @@ function loadAccount() {
 function saveAccount(patch = {}) {
   const prev = loadAccount();
   cache = { ...prev, ...patch };
+  if (cache.activeUid) {
+    cache.boundUid = cache.activeUid;
+  }
   try {
     fs.writeFileSync(ACCOUNT_FILE, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
   } catch (err) {
@@ -64,6 +71,7 @@ function extractUid(payload) {
  *   ok: boolean,
  *   status: string,
  *   uid: string | null,
+ *   prevUid: string | null,
  *   account: ReturnType<typeof loadAccount>,
  * }}
  */
@@ -72,6 +80,7 @@ function handleAccountPayload(payload) {
   const uid = extractUid(payload);
   const account = loadAccount();
   const now = Number(payload?.ts) || Date.now();
+  const prevUid = account.activeUid || account.boundUid || null;
 
   if (kind === 'account_logout') {
     saveAccount({
@@ -79,7 +88,13 @@ function handleAccountPayload(payload) {
       lastSeenAt: now,
       sessionLoggedIn: false,
     });
-    return { ok: true, status: 'logout', uid: null, account: loadAccount() };
+    return {
+      ok: true,
+      status: 'logout',
+      uid: null,
+      prevUid,
+      account: loadAccount(),
+    };
   }
 
   if (kind === 'account_login' || kind === 'account_hello') {
@@ -89,56 +104,104 @@ function handleAccountPayload(payload) {
         lastSeenAt: now,
         sessionLoggedIn: false,
       });
-      return { ok: false, status: 'logged_out', uid: null, account: loadAccount() };
+      return {
+        ok: false,
+        status: 'logged_out',
+        uid: null,
+        prevUid,
+        account: loadAccount(),
+      };
     }
-    if (!account.boundUid) {
+    if (!prevUid) {
       saveAccount({
+        activeUid: uid,
         boundUid: uid,
         boundAt: now,
         lastSeenUid: uid,
         lastSeenAt: now,
         sessionLoggedIn: true,
       });
-      return { ok: true, status: 'auto_bound', uid, account: loadAccount() };
+      return {
+        ok: true,
+        status: 'auto_bound',
+        uid,
+        prevUid: null,
+        account: loadAccount(),
+      };
     }
-    if (account.boundUid !== uid) {
+    if (prevUid !== uid) {
       saveAccount({
+        activeUid: uid,
+        boundUid: uid,
         lastSeenUid: uid,
         lastSeenAt: now,
-        sessionLoggedIn: false,
+        sessionLoggedIn: true,
       });
-      return { ok: false, status: 'mismatch', uid, account: loadAccount() };
+      return {
+        ok: true,
+        status: 'switched',
+        uid,
+        prevUid,
+        account: loadAccount(),
+      };
     }
     saveAccount({
       lastSeenUid: uid,
       lastSeenAt: now,
       sessionLoggedIn: true,
     });
-    return { ok: true, status: 'logged_in', uid, account: loadAccount() };
+    return {
+      ok: true,
+      status: 'logged_in',
+      uid,
+      prevUid,
+      account: loadAccount(),
+    };
   }
 
   if (!uid) {
-    return { ok: false, status: 'logged_out', uid: null, account };
+    return {
+      ok: false,
+      status: 'logged_out',
+      uid: null,
+      prevUid,
+      account,
+    };
   }
 
-  if (!account.boundUid) {
+  if (!prevUid) {
     saveAccount({
+      activeUid: uid,
       boundUid: uid,
       boundAt: now,
       lastSeenUid: uid,
       lastSeenAt: now,
       sessionLoggedIn: true,
     });
-    return { ok: true, status: 'auto_bound', uid, account: loadAccount() };
+    return {
+      ok: true,
+      status: 'auto_bound',
+      uid,
+      prevUid: null,
+      account: loadAccount(),
+    };
   }
 
-  if (account.boundUid !== uid) {
+  if (prevUid !== uid) {
     saveAccount({
+      activeUid: uid,
+      boundUid: uid,
       lastSeenUid: uid,
       lastSeenAt: now,
-      sessionLoggedIn: false,
+      sessionLoggedIn: true,
     });
-    return { ok: false, status: 'mismatch', uid, account: loadAccount() };
+    return {
+      ok: true,
+      status: 'switched',
+      uid,
+      prevUid,
+      account: loadAccount(),
+    };
   }
 
   saveAccount({
@@ -146,7 +209,13 @@ function handleAccountPayload(payload) {
     lastSeenAt: now,
     sessionLoggedIn: true,
   });
-  return { ok: true, status: 'ok', uid, account: loadAccount() };
+  return {
+    ok: true,
+    status: 'ok',
+    uid,
+    prevUid,
+    account: loadAccount(),
+  };
 }
 
 module.exports = {

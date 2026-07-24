@@ -30,16 +30,38 @@ const ANIM = {
   ],
 };
 
+const DANCE_BUFFER = [
+  { src: 'assets/dancing-buffer/1-4.png', x: -8 },
+  { src: 'assets/dancing-buffer/2.png', x: -16 },
+  { src: 'assets/dancing-buffer/3.png', x: -22 },
+  { src: 'assets/dancing-buffer/1-4.png', x: 8 },
+  { src: 'assets/dancing-buffer/5.png', x: 16 },
+  { src: 'assets/dancing-buffer/6.png', x: 22 },
+];
+
 const FRAME_MS = 500;
+const DANCE_FRAME_MS = 200;
 const DOUBLE_CLICK_MS = 280;
+
+const SYNC_BUFFER_START = new Set([
+  'switching',
+  'syncing_login',
+]);
+const SYNC_BUFFER_PULL_REASONS = new Set(['switch_pull', 'login_pull']);
 
 let baseAnim = 'wait';
 let pointing = false;
 let sequencePlaying = false;
+let syncBuffering = false;
 let frameIndex = 0;
 let frameTimer = null;
 let currentSrc = '';
 let clickTimer = null;
+
+for (const step of DANCE_BUFFER) {
+  const img = new Image();
+  img.src = step.src;
+}
 
 function applySpriteDisplaySize() {
   if (!petSprite?.naturalWidth) return;
@@ -79,9 +101,46 @@ function startFrameLoop(frames) {
   }, FRAME_MS);
 }
 
-function applyBaseAnim() {
+function clearDanceOffset() {
+  if (!petSprite) return;
+  petSprite.classList.remove('pet-dancing');
+  petSprite.style.transform = '';
+}
+
+function applyDanceFrame(step) {
+  if (!petSprite || !step) return;
+  petSprite.classList.add('pet-dancing');
+  petSprite.style.transform = `translateX(${step.x}px)`;
+  setSpriteSrc(step.src);
+}
+
+function startDanceBuffer() {
+  if (!petSprite || syncBuffering) return;
+  syncBuffering = true;
   pointing = false;
   sequencePlaying = false;
+  stopFrameLoop();
+  frameIndex = 0;
+  applyDanceFrame(DANCE_BUFFER[0]);
+  frameTimer = setInterval(() => {
+    frameIndex = (frameIndex + 1) % DANCE_BUFFER.length;
+    applyDanceFrame(DANCE_BUFFER[frameIndex]);
+  }, DANCE_FRAME_MS);
+}
+
+function stopDanceBuffer() {
+  if (!syncBuffering) return;
+  syncBuffering = false;
+  stopFrameLoop();
+  clearDanceOffset();
+  applyBaseAnim();
+}
+
+function applyBaseAnim() {
+  if (syncBuffering) return;
+  pointing = false;
+  sequencePlaying = false;
+  clearDanceOffset();
   startFrameLoop(ANIM[baseAnim]);
 }
 
@@ -89,11 +148,11 @@ function setWatching(watching) {
   const next = watching ? 'watch' : 'wait';
   if (baseAnim === next) return;
   baseAnim = next;
-  if (!pointing && !sequencePlaying) applyBaseAnim();
+  if (!syncBuffering && !pointing && !sequencePlaying) applyBaseAnim();
 }
 
 function playSequence(frames, loops = 1) {
-  if (!petSprite || !frames?.length || sequencePlaying) return;
+  if (!petSprite || !frames?.length || sequencePlaying || syncBuffering) return;
   pointing = false;
   sequencePlaying = true;
   stopFrameLoop();
@@ -116,7 +175,7 @@ function playSequence(frames, loops = 1) {
 }
 
 function playPointOnce() {
-  if (!petSprite || pointing || sequencePlaying) return;
+  if (!petSprite || pointing || sequencePlaying || syncBuffering) return;
   pointing = true;
   stopFrameLoop();
   const frames = ANIM.point;
@@ -137,13 +196,16 @@ let lastQuestionAt = 0;
 const QUESTION_COOLDOWN_MS = 4500;
 function playQuestionOnce() {
   const now = Date.now();
-  if (sequencePlaying || now - lastQuestionAt < QUESTION_COOLDOWN_MS) return;
+  if (syncBuffering || sequencePlaying || now - lastQuestionAt < QUESTION_COOLDOWN_MS) {
+    return;
+  }
   lastQuestionAt = now;
   playSfx('assets/noise/distrcted.mp3');
   playSequence(ANIM.question, 2);
 }
 
 function playAnnoyedOnce() {
+  if (syncBuffering) return;
   playSfx('assets/noise/go-off.mp3');
   playSequence(ANIM.annoyed, 1);
 }
@@ -157,6 +219,8 @@ async function goHome() {
 }
 
 function handlePetClick() {
+  // 切号/登录同步中：跳舞占住交互，避免打开旧账号知识库
+  if (syncBuffering) return;
   if (clickTimer) {
     clearTimeout(clickTimer);
     clickTimer = null;
@@ -165,8 +229,43 @@ function handlePetClick() {
   }
   clickTimer = setTimeout(() => {
     clickTimer = null;
+    if (syncBuffering) return;
     openNotesPage();
   }, DOUBLE_CLICK_MS);
+}
+
+function shouldStartAccountBuffer(payload) {
+  const bind = String(payload?.bindStatus || '');
+  if (bind === 'switched' || bind === 'auto_bound') return true;
+  const status = String(payload?.status || '');
+  if (SYNC_BUFFER_START.has(status)) return true;
+  const reason = String(payload?.reason || '');
+  return status === 'pulling' && SYNC_BUFFER_PULL_REASONS.has(reason);
+}
+
+function shouldStopAccountBuffer(payload) {
+  const kind = String(payload?.kind || '');
+  if (kind === 'account_switched' || kind === 'kb_account_ready') return true;
+  const status = String(payload?.status || '');
+  if (
+    status === 'account_switched' ||
+    status === 'pull_error' ||
+    status === 'auth_error'
+  ) {
+    return true;
+  }
+  // 无云端 / 未拿到 token：onAccountReady 会 ready，但仍以 canva 的 account_switched 为准；
+  // 这里只作为兜底，避免极端情况下一直跳。
+  const reason = String(payload?.reason || '');
+  if (
+    status === 'ready' &&
+    (reason === 'local_only' ||
+      reason === 'waiting_auth' ||
+      reason === 'waiting_auth_uid_match')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function handleEvent(payload) {
@@ -221,16 +320,36 @@ function handleEvent(payload) {
 
     case 'account_hello':
     case 'account_login': {
-      if (payload.ok === false || payload.bindStatus === 'mismatch') {
+      if (payload.ok === false) {
         setWatching(false);
-        if (payload.bindStatus === 'mismatch') playQuestionOnce();
+        stopDanceBuffer();
         break;
       }
-      playPointOnce();
+      // 切号/首次绑定：立刻开跳舞缓冲（不等后续 sync_state）
+      if (shouldStartAccountBuffer(payload)) {
+        startDanceBuffer();
+      } else {
+        playPointOnce();
+      }
+      break;
+    }
+
+    case 'kb_account_ready':
+    case 'account_switched':
+      stopDanceBuffer();
+      break;
+
+    case 'sync_state': {
+      if (shouldStartAccountBuffer(payload)) {
+        startDanceBuffer();
+      } else if (shouldStopAccountBuffer(payload)) {
+        stopDanceBuffer();
+      }
       break;
     }
 
     case 'account_logout':
+    case 'account_logged_out':
       setWatching(false);
       break;
 

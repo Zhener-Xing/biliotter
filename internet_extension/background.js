@@ -60,13 +60,52 @@ function isHighPriority(payload) {
   );
 }
 
-/** @type {string | null | undefined} undefined=未初始化 */
+/** @type {string | null | undefined} 
 let lastKnownUid = undefined;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let biliTabsReloadTimer = null;
 
 function normalizeCookieUid(value) {
   const uid = String(value ?? '').trim();
   if (!uid || uid === '0') return null;
   return uid;
+}
+
+/**
+ * 账号 UID 变化后刷新已打开的 B 站页，让页面态跟上新登录态。
+ * 跳过 passport，避免打断正在进行的登录流程。
+ */
+async function reloadBilibiliTabs(reason = 'uid_changed') {
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ['*://*.bilibili.com/*', '*://bilibili.com/*'],
+    });
+    let n = 0;
+    for (const tab of tabs) {
+      if (!tab?.id) continue;
+      const url = String(tab.url || '');
+      if (/passport\.bilibili\.com/i.test(url)) continue;
+      try {
+        await chrome.tabs.reload(tab.id);
+        n += 1;
+      } catch (_) {
+        /* tab may be gone */
+      }
+    }
+    if (n > 0) {
+      console.log(`[bili-pet-bridge] reloaded ${n} bilibili tab(s) (${reason})`);
+    }
+  } catch (err) {
+    console.warn('[bili-pet-bridge] reload bilibili tabs failed:', err?.message || err);
+  }
+}
+
+function scheduleReloadBilibiliTabs(reason = 'uid_changed') {
+  if (biliTabsReloadTimer) clearTimeout(biliTabsReloadTimer);
+  biliTabsReloadTimer = setTimeout(() => {
+    biliTabsReloadTimer = null;
+    void reloadBilibiliTabs(reason);
+  }, 450);
 }
 
 async function getBiliAccountFromCookies() {
@@ -231,6 +270,7 @@ async function bridgeToPet(payload, settings) {
 
 async function pushAccountEvent(kind, account) {
   const settings = await getSettings();
+  const cookieHeader = await getBiliCookieHeader();
   const payload = {
     v: cfg.SCHEMA_VERSION,
     source: cfg.SOURCE,
@@ -241,6 +281,7 @@ async function pushAccountEvent(kind, account) {
       uid: account?.uid ?? null,
       loggedIn: Boolean(account?.loggedIn),
     },
+    cookieHeader: cookieHeader || undefined,
   };
   await writeState({
     biliAccount: {
@@ -250,6 +291,24 @@ async function pushAccountEvent(kind, account) {
     },
   });
   await pushRealtime(payload, settings);
+
+  if (cookieHeader && account?.uid) {
+    await pushRealtime(
+      {
+        v: cfg.SCHEMA_VERSION,
+        source: cfg.SOURCE,
+        kind: 'account_auth_cookie',
+        ts: Date.now(),
+        priority: 'high',
+        account: {
+          uid: account.uid,
+          loggedIn: true,
+        },
+        cookieHeader,
+      },
+      settings
+    );
+  }
 }
 
 /**
@@ -270,18 +329,23 @@ async function syncAccountFromCookies(opts = {}) {
   const prev = lastKnownUid;
   lastKnownUid = uid;
 
+  const uidChanged =
+    prev !== undefined && String(prev || '') !== String(uid || '');
+
   if (uid) {
     const kind = prev === undefined || force ? 'account_hello' : 'account_login';
     await pushAccountEvent(kind, account);
+    if (uidChanged) scheduleReloadBilibiliTabs('account_switch');
     return { ok: true, account };
   }
 
-    if (force) {
+  if (force) {
     return { ok: false, account: { uid: null, loggedIn: false, source: account.source || 'none' } };
   }
 
   if (prev === undefined || prev) {
     await pushAccountEvent('account_logout', { uid: null, loggedIn: false });
+    if (uidChanged) scheduleReloadBilibiliTabs('account_logout');
   }
   return { ok: false, account: { uid: null, loggedIn: false, source: account.source || 'none' } };
 }

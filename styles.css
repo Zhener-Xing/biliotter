@@ -54,6 +54,16 @@ body {
     animation: pet-shake 0.45s steps(4, end);
 }
 
+/* 登录/切号等待云端 pull：关掉 idle 浮动，由 JS 控制左右位移 */
+#pet-sprite.pet-dancing {
+    animation: none;
+    transition: transform 0.18s steps(2, end);
+}
+
+#pet-sprite.pet-dancing:hover {
+    transform: none;
+}
+
 @keyframes idle-float {
     0%,
     100% {
