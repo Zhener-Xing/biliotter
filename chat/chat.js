@@ -24,7 +24,6 @@ let gameConcluding = false;
 /** @type {null | { mode?: string, q?: string, choices?: string[], disabled?: boolean }} */
 let lastGameUi = null;
 
-/* —— 答题界面奔跑动画 —— */
 const GameRun = (() => {
   const SCALE = 1;
   const OTTER_W = 73;
@@ -51,14 +50,12 @@ const GameRun = (() => {
   const JUMP_UP_MS = 240;
   const JUMP_HANG_MS = 200;
   const JUMP_DOWN_MS = 280;
-  // Obs top is 15px above green — clear with comfortable margin
   const JUMP_HEIGHT = 34;
   const SCROLL_SPEED = 55;
   const TILE_COUNT = 3;
-  // Fixed stand point so tile width changes never shift the whole runway
   const STAND_LOCAL_X = 22;
   const HURT_BLINK_MS = 90;
-  const HURT_BLINK_TOGGLES = 8; // 4 visible flashes
+  const HURT_BLINK_TOGGLES = 8; 
 
   const images = {};
   /** @type {{ file: string, x: number, isObs?: boolean }[]} */
@@ -568,15 +565,90 @@ function setGameFeedback(text, kind) {
     return;
   }
   gameFeedback.hidden = false;
-  gameFeedback.textContent = t;
+  setMathContent(gameFeedback, t);
   gameFeedback.classList.toggle('is-correct', kind === 'correct');
   gameFeedback.classList.toggle('is-wrong', kind === 'wrong');
+}
+
+function takeBraceGroup(s, openIdx) {
+  if (s[openIdx] !== '{') return null;
+  let depth = 0;
+  for (let i = openIdx; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return s.slice(openIdx, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * If model forgot $…$ around TeX commands, wrap contiguous command clusters.
+ * Leaves strings that already use $ / \( alone.
+ */
+function ensureLatexDelimiters(text) {
+  const raw = String(text || '');
+  if (!raw || /\$|\\\(|\\\[/.test(raw)) return raw;
+
+  const cmdRe =
+    /\\(?:frac|dfrac|tfrac|sqrt|sum|prod|int|oint|lim|sin|cos|tan|cot|sec|csc|log|ln|exp|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|infty|partial|nabla|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|omega|mathrm|mathbf|mathcal|mathbb|left|right|overline|underline|hat|bar|vec|dot|ddot|to|rightarrow|leftarrow|Rightarrow|Leftarrow|in|notin|subset|supset|cup|cap|emptyset|forall|exists|quad|qquad|text|operatorname)(?![a-zA-Z])/g;
+
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = cmdRe.exec(raw))) {
+    const start = m.index;
+    let i = start + m[0].length;
+    if (raw[i] === '*') i += 1;
+    if (raw[i] === '[') {
+      const close = raw.indexOf(']', i);
+      if (close >= 0) i = close + 1;
+    }
+    while (raw[i] === '{') {
+      const grp = takeBraceGroup(raw, i);
+      if (!grp) break;
+      i += grp.length;
+    }
+    out += raw.slice(last, start);
+    out += `$${raw.slice(start, i)}$`;
+    last = i;
+    cmdRe.lastIndex = i;
+  }
+  out += raw.slice(last);
+  return out;
+}
+
+const KATEX_DELIMS = [
+  { left: '$$', right: '$$', display: true },
+  { left: '$', right: '$', display: false },
+  { left: '\\(', right: '\\)', display: false },
+  { left: '\\[', right: '\\]', display: true },
+];
+
+function setMathContent(el, text) {
+  if (!el) return;
+  const prepared = ensureLatexDelimiters(text);
+  el.textContent = prepared;
+  if (typeof window.renderMathInElement === 'function') {
+    try {
+      window.renderMathInElement(el, {
+        delimiters: KATEX_DELIMS,
+        throwOnError: false,
+        strict: 'ignore',
+        trust: false,
+      });
+    } catch (_) {
+      /* keep plain text */
+    }
+  }
 }
 
 function renderGameUi(ui) {
   if (!ui || !gameQuestion) return;
   lastGameUi = ui;
-  gameQuestion.textContent = String(ui.q || '');
+  setMathContent(gameQuestion, String(ui.q || ''));
   const choices = Array.isArray(ui.choices) ? ui.choices : [];
   const disabled =
     Boolean(ui.disabled) ||
@@ -586,7 +658,7 @@ function renderGameUi(ui) {
   gameOptionButtons.forEach((btn, i) => {
     const label = btn.querySelector('.game-option-label');
     const text = String(choices[i] || '');
-    if (label) label.textContent = text;
+    if (label) setMathContent(label, text);
     btn.title = text;
     btn.disabled = disabled;
   });
@@ -804,5 +876,8 @@ window.biliPet?.onGameStopped?.((payload) => {
   if (msg) appendChatMsg('system', msg);
 });
 
-appendChatMsg('system', '嗨，我是 BiliOtter，有什么想聊的？输入 /game 开始答题。');
+appendChatMsg(
+  'system',
+  '嗨，我是 BiliOtter，有什么想聊的？输入 /game 开始答题，/plan 定制学习计划；也可以说「加入稍后再看」「加入我的收藏」。'
+);
 setTimeout(() => chatInput?.focus(), 80);

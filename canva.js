@@ -15,7 +15,8 @@ const {
   isActive: isGameActive,
   setPetNotifier,
 } = require('./skills/game-quiz');
-const { handleAccountPayload, loadAccount } = require('./account-bind');
+const { tryHandlePlanChat, learningPlanSkill } = require('./skills/learning-plan');
+const { handleAccountPayload, loadAccount, saveAccount, clearBinding, commitBinding } = require('./account-bind');
 const {
   closeNotesDb,
   loadNoteDoc,
@@ -28,17 +29,47 @@ const {
   addDistractCount,
   normalizeBvid,
   setActiveUid,
+  getActiveUid,
   ASSETS_DIR,
 } = require('./notes-db');
 const {
   startCloudSync,
   onAccountReady,
+  flushAndPurgeUid,
   handleAuthCookiePayload,
   flushBeforeQuit,
   stopCloudSync,
   cloudEnabled,
+  scheduleBackgroundPurge,
+  sweepOrphanLocalStores,
+  loadTokenForUid,
 } = require('./cloud-sync');
+const {
+  touchExtensionPresence,
+  isExtensionAlive,
+  pollExtensionPresence,
+  setPresenceChangeHandler,
+} = require('./extension-presence');
+const {
+  setAccountOpsReady,
+  isAccountOpsReady,
+  gateMessage,
+} = require('./session-gate');
+const { setBiliCookieHeader, getBiliCookieHeader } = require('./bili-web-api');
 
+function rememberBiliCookieFromPayload(payload) {
+  const cookie =
+    payload?.cookieHeader ||
+    payload?.cookie ||
+    payload?.account?.cookieHeader ||
+    '';
+  // #region agent log
+  if (payload?.kind === 'extension_heartbeat' || payload?.kind === 'account_hello' || payload?.kind === 'account_login' || cookie) {
+    fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'D',location:'canva.js:rememberBiliCookieFromPayload',message:'bridge cookie payload',data:{kind:String(payload?.kind||''),cookieOk:payload?.cookieOk??null,hasCookieHeader:Boolean(cookie),cookieHasCsrf:/(?:^|;\s*)bili_jct=/.test(String(cookie)),cookieHasSess:/(?:^|;\s*)SESSDATA=/.test(String(cookie)),uid:String(payload?.account?.uid||payload?.uid||'')},timestamp:Date.now()})}).catch(()=>{});
+  }
+  // #endregion
+  if (cookie) setBiliCookieHeader(cookie);
+}
 const STUDY_SWITCH_REASONS = new Set([
   'pagehide',
   'tab_hidden',
@@ -47,11 +78,20 @@ const STUDY_SWITCH_REASONS = new Set([
   'switch_bvid',
 ]);
 
+/** 知识区 / 学习相关分区（与扩展侧保持一致） */
+const STUDY_ZONE_TIDS = new Set([
+  36, 201, 124, 228, 207, 208, 209, 229, 122, 39, 96, 98,
+  1010, 2084, 2085, 2086, 2087, 2088, 2089, 2090, 2091, 2092, 2093, 2094, 2095,
+]);
+const STUDY_ZONE_RE = /学习|知识|课堂/;
+
 let studyClock = null;
 const STUDY_CREDIT_CAP_MS = 10_000;
 /** Serialize account switch / bind so overlapping hellos cannot clobber the active DB. */
 let accountOpChain = Promise.resolve();
 let accountOpSeq = 0;
+/** Prevent heartbeat from restarting an in-flight first-pull for the same uid. */
+let accountReadyInFlightUid = null;
 
 loadEnv(path.join(__dirname, '.env'));
 
@@ -412,6 +452,12 @@ function updateNoteContext(payload) {
   ).trim();
   const switchedBvid = Boolean(bvid && prevBvid && bvid !== prevBvid);
 
+  // #region agent log
+  if (kind === 'session_meta' || kind === 'progress' || kind === 'heartbeat' || fullSubtitle || transcript) {
+    fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'G',location:'canva.js:updateNoteContext',message:'noteContext update',data:{kind,bvid,switchedBvid,fullLen:fullSubtitle.length,transcriptLen:transcript.length,contextLen:contextText.length,subtitleStatus:payload.subtitleStatus||null,lineCount:payload.lineCount??null},timestamp:Date.now()})}).catch(()=>{});
+  }
+  // #endregion
+
   if (switchedBvid) {
     noteContext = { ...payload };
     return;
@@ -486,6 +532,12 @@ function broadcastPetEvent(payload, opts = {}) {
 }//？谁都不知道啥时候修的函数
 
 function openNotesWindow() {
+  const gate = requireBoundAccount();
+  if (!gate.ok) {
+    notifyGateBlocked(gate.error, 'open_notes');
+    return { ok: false, error: gate.error || 'not_bound', message: gateMessage(gate.error) };
+  }
+
   if (notesWindow && !notesWindow.isDestroyed()) {
     notesWindow.focus();
     return { ok: true, focused: true };
@@ -547,6 +599,12 @@ function openNotesWindow() {
 }//打开笔记函数
 
 function openChatWindow() {
+  const gate = requireBoundAccount();
+  if (!gate.ok) {
+    notifyGateBlocked(gate.error, 'open_chat');
+    return { ok: false, error: gate.error || 'not_bound', message: gateMessage(gate.error) };
+  }
+
   if (chatWindow && !chatWindow.isDestroyed()) {
     chatWindow.focus();
     return { ok: true, focused: true };
@@ -622,8 +680,19 @@ function createWindow() {
   });
 }//窗口创建管理函数
 
+function isStudyRelatedPayload(payload = {}) {
+  if (typeof payload.studyRelated === 'boolean') return payload.studyRelated;
+  const tid = Number(payload.tid);
+  const tidV2 = Number(payload.tid_v2 ?? payload.tidV2);
+  if (STUDY_ZONE_TIDS.has(tid) || STUDY_ZONE_TIDS.has(tidV2)) return true;
+  const labels = [payload.tname, payload.tname_v2 ?? payload.tnameV2]
+    .map((s) => String(s || ''))
+    .join(' ');
+  return STUDY_ZONE_RE.test(labels);
+}
+
 function flushStudyClock(at = Date.now()) {
-  if (!studyClock || studyClock.paused) return;
+  if (!studyClock || studyClock.paused || !studyClock.studyRelated) return;
   const delta = Math.max(0, at - studyClock.lastAt);
   if (delta > 0) {
     addStudyMs(Math.min(delta, STUDY_CREDIT_CAP_MS), at);
@@ -631,8 +700,27 @@ function flushStudyClock(at = Date.now()) {
   studyClock.lastAt = at;
 }//活跃度函数，简单的设计，不要碰
 
+function applyStudyRelated(payload, now) {
+  if (!studyClock) return;
+  const hasHint =
+    typeof payload.studyRelated === 'boolean' ||
+    payload.tid != null ||
+    payload.tid_v2 != null ||
+    payload.tname ||
+    payload.tname_v2;
+  if (!hasHint) return;
+  const related = isStudyRelatedPayload(payload);
+  if (related && !studyClock.studyRelated) {
+   
+    studyClock.lastAt = now;
+  }
+  studyClock.studyRelated = related;
+}
+
 function recordStudyActivity(payload) {
   if (!payload?.kind) return;
+  const bound = requireBoundAccount();
+  if (!bound.ok) return;
   const kind = String(payload.kind);
   if (kind.startsWith('notes_') || kind === 'llm_reply') return;
 
@@ -643,6 +731,7 @@ function recordStudyActivity(payload) {
       sessionId: payload.sessionId || null,
       lastAt: now,
       paused: false,
+      studyRelated: false,
     };
     return;
   }
@@ -654,9 +743,11 @@ function recordStudyActivity(payload) {
         sessionId: payload.sessionId || null,
         lastAt: now,
         paused,
+        studyRelated: isStudyRelatedPayload(payload),
       };
       return;
     }
+    applyStudyRelated(payload, now);
     if (paused) {
       flushStudyClock(now);
       studyClock.paused = true;
@@ -695,17 +786,260 @@ function recordStudyActivity(payload) {
     flushStudyClock(now);
     studyClock = null;
   }
-}//专注力函数，后续需要修改容忍度，先放在这里后期修
+}//专注力函数，容忍度已经完成修改
+
+function requireBoundAccount() {
+  const uid = getActiveUid();
+  const acc = loadAccount();
+  if (!isExtensionAlive()) {
+    return { ok: false, error: 'extension_offline' };
+  }
+  if (!uid || !acc.sessionLoggedIn) {
+    return { ok: false, error: 'not_bound' };
+  }
+  return { ok: true, uid };
+}
+
+function notifyGateBlocked(error, via = 'gate') {
+  const err = error || 'not_bound';
+  broadcastPetEvent(
+    {
+      v: 1,
+      source: 'bili-pet',
+      kind: 'pet_gate_blocked',
+      ts: Date.now(),
+      ok: false,
+      error: err,
+      message: gateMessage(err),
+      via,
+    },
+    { touchLatest: false }
+  );
+}
+
+function closeAccountWindows() {
+  for (const win of [notesWindow, chatWindow, homeWindow]) {
+    if (win && !win.isDestroyed()) {
+      try {
+        win.close();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+}
+
+function lockLocalSession(reason = 'locked') {
+  setAccountOpsReady(false);
+  const acc = loadAccount();
+  if (acc.sessionLoggedIn) {
+    saveAccount({
+      sessionLoggedIn: false,
+      lastSeenAt: Date.now(),
+    });
+  }
+  if (getActiveUid()) {
+    setActiveUid(null);
+  } else {
+    closeNotesDb();
+  }
+  closeAccountWindows();
+  console.log(`[bili-pet] local session locked (${reason})`);
+}
+
+/** Mount DB + mark session live after extension proves a Bilibili uid. */
+function unlockLocalSession(uid, payload = {}) {
+  const id = String(uid || '').trim();
+  if (!id) return { ok: false, error: 'no_uid' };
+
+  const acc = loadAccount();
+  const bound = acc.activeUid || acc.boundUid;
+  const wasLive =
+    Boolean(acc.sessionLoggedIn) &&
+    getActiveUid() === id &&
+    isAccountOpsReady();
+
+  if (!bound || bound !== id) {
+    const gate = handleAccountPayload({
+      ...payload,
+      kind: 'account_hello',
+      account: {
+        ...(payload.account || {}),
+        uid: id,
+        loggedIn: true,
+      },
+    });
+    broadcastPetEvent(
+      {
+        ...payload,
+        kind: 'account_hello',
+        bindStatus: gate.status,
+        boundUid: gate.account?.activeUid || gate.account?.boundUid || null,
+        activeUid: gate.account?.activeUid || null,
+        prevUid: gate.prevUid || null,
+        ok: gate.ok,
+        via: 'unlock',
+      },
+      { touchLatest: false }
+    );
+    console.log(`[bili-pet] account ${gate.status} (unlock)`, gate.uid || id);
+    if (!gate.ok || !gate.uid) return { ok: false, error: gate.status };
+
+    if (gate.status === 'auto_bound') {
+      setActiveUid(gate.uid);
+      setAccountOpsReady(true);
+      saveAccountSessionLoggedIn(gate.uid);
+      void ensureAccountLocalStore(gate, payload);
+      return { ok: true, uid: gate.uid, status: gate.status };
+    }
+    if (gate.status === 'switched') {
+      void ensureAccountLocalStore(gate, payload);
+      return { ok: true, uid: gate.uid, status: gate.status };
+    }
+    if (gate.status === 'logged_in') {
+      accountOpSeq += 1; // cancel stale logout/purge from earlier false locks
+      setActiveUid(gate.uid);
+      setAccountOpsReady(true);
+      saveAccountSessionLoggedIn(gate.uid);
+      void ensureAccountLocalStore(gate, payload);
+      return { ok: true, uid: gate.uid, status: gate.status };
+    }
+    return { ok: false, error: gate.status };
+  }
+
+  // Same bound uid: only bump op seq when recovering from a lock (not every heartbeat)
+  if (!wasLive) {
+    accountOpSeq += 1;
+  }
+  saveAccountSessionLoggedIn(id);
+  if (!getActiveUid()) setActiveUid(id);
+  setAccountOpsReady(true);
+  if (!wasLive) {
+    void ensureAccountLocalStore(
+      {
+        ok: true,
+        status: 'logged_in',
+        uid: id,
+        prevUid: null,
+        account: loadAccount(),
+      },
+      payload
+    );
+  } else if (payload.cookieHeader) {
+    void handleAuthCookiePayload(payload);
+  }
+  return { ok: true, uid: id, status: 'logged_in' };
+}
+
+function enqueueLogoutPurge(reason) {
+  const seq = ++accountOpSeq;
+  const uidSnapshot =
+    getActiveUid() || loadAccount().activeUid || loadAccount().boundUid || null;
+  accountOpChain = accountOpChain
+    .then(async () => {
+      if (seq !== accountOpSeq) return;
+      const result = await flushAndPurgeActiveAccount(reason);
+      if (!result?.ok && !result?.skipped && uidSnapshot) {
+        // 数据安全优先：失败不删；持续后台重试
+        scheduleBackgroundPurge(uidSnapshot, reason);
+      }
+    }, async () => {
+      if (seq !== accountOpSeq) return;
+      const result = await flushAndPurgeActiveAccount(reason);
+      if (!result?.ok && !result?.skipped && uidSnapshot) {
+        scheduleBackgroundPurge(uidSnapshot, reason);
+      }
+    })
+    .catch((err) => {
+      console.warn('[bili-pet] logout purge failed:', err?.message || err);
+      if (uidSnapshot) scheduleBackgroundPurge(uidSnapshot, reason);
+    });
+}
+
+async function flushAndPurgeActiveAccount(reason = 'logout_push') {
+  const uidToPurge = getActiveUid() || loadAccount().activeUid || loadAccount().boundUid;
+  if (!uidToPurge) {
+    clearBinding();
+    return { ok: true, skipped: true, reason: 'no_uid' };
+  }
+
+  // Ensure DB mounted for push if boot skipped mount while session was false
+  if (!getActiveUid()) {
+    setActiveUid(uidToPurge);
+  }
+
+  const result = await flushAndPurgeUid(uidToPurge, reason);
+  if (!result.ok) {
+    // push/purge 失败也不留挂载：访问门闩靠 sessionLoggedIn，但卸库更稳妥
+    if (getActiveUid()) setActiveUid(null);
+    else closeNotesDb();
+    broadcastPetEvent(
+      {
+        v: 1,
+        source: 'bili-pet',
+        kind: 'purge_blocked',
+        ts: Date.now(),
+        uid: uidToPurge,
+        error: result.error || 'purge_blocked',
+        reason: result.error || 'purge_blocked',
+      },
+      { touchLatest: false }
+    );
+    return result;
+  }
+
+  clearBinding();
+  noteContext = null;
+  latestEvent = null;
+  flushStudyClock();
+  studyClock = null;
+  closeAccountWindows();
+  broadcastPetEvent(
+    {
+      v: 1,
+      source: 'bili-pet',
+      kind: 'account_purged',
+      ts: Date.now(),
+      uid: uidToPurge,
+      reason,
+      ok: true,
+    },
+    { touchLatest: false }
+  );
+  return result;
+}
 
 async function ensureAccountLocalStore(gate, payload = {}) {
   if (!gate?.ok || !gate.uid) return;
-  // logged_in 会刷很多次，不能每次都 pull/换库；只在首次绑定或真正切号时同步
-  if (gate.status !== 'auto_bound' && gate.status !== 'switched') {
-    return;
+  const switched = gate.status === 'switched';
+  const autoBound = gate.status === 'auto_bound';
+  const loggedIn =
+    gate.status === 'logged_in' || gate.status === 'ok' || gate.status === 'hello';
+
+  // Heartbeat 会频繁 logged_in；仅首次绑定 / 切号 / 未就绪时走同步
+  if (!switched && !autoBound) {
+    if (!loggedIn) return;
+    if (
+      isAccountOpsReady() &&
+      getActiveUid() === gate.uid &&
+      loadAccount().sessionLoggedIn
+    ) {
+      return;
+    }
+    if (accountReadyInFlightUid === gate.uid) {
+      // 首轮卡在 waiting_auth：若此刻已有 cookie，允许打断重跑鉴权
+      const hasToken = Boolean(loadTokenForUid(gate.uid)?.token);
+      const hasCookie = Boolean(
+        payload.cookieHeader ||
+          payload.account?.cookieHeader ||
+          getBiliCookieHeader()
+      );
+      if (hasToken || !hasCookie) return;
+    }
   }
 
   const seq = ++accountOpSeq;
-  const switched = gate.status === 'switched';
+  accountReadyInFlightUid = gate.uid;
   const cookieHeader =
     payload.cookieHeader ||
     payload.account?.cookieHeader ||
@@ -739,16 +1073,44 @@ async function ensureAccountLocalStore(gate, payload = {}) {
       { touchLatest: false }
     );
 
+    // 切号：立刻提交绑定与本地库挂载意图（旧号后台清）
+    if (switched || autoBound) {
+      commitBinding(uid);
+    } else {
+      saveAccountSessionLoggedIn(uid);
+    }
+
     const result = await onAccountReady({
       uid,
       prevUid,
       switched,
+      autoBound,
       cookieHeader,
       opSeq: seq,
       isStale: () => seq !== accountOpSeq,
     });
 
     if (seq !== accountOpSeq) return;
+
+    if (!result?.ok) {
+      broadcastPetEvent(
+        {
+          v: 1,
+          source: 'bili-pet',
+          kind: 'switch_blocked',
+          ts: Date.now(),
+          uid,
+          prevUid,
+          error: result?.cause || result?.error || 'ready_failed',
+          reason: result?.cause || result?.error || 'ready_failed',
+          ok: false,
+        },
+        { touchLatest: false }
+      );
+      return;
+    }
+
+    commitBinding(uid);
 
     broadcastPetEvent(
       {
@@ -760,52 +1122,84 @@ async function ensureAccountLocalStore(gate, payload = {}) {
         prevUid,
         bindStatus: gate.status,
         boundUid: uid,
-        ok: Boolean(result?.ok),
+        ok: true,
         switched,
+        opsReady: Boolean(result.opsReady),
+        pullError: result.pullError || null,
       },
       { touchLatest: false }
     );
 
-    // 知识库页若已打开：硬刷新，避免只靠渲染进程事件漏刷仍显示上一账号
-    broadcastPetEvent(
-      {
-        v: 1,
-        source: 'bili-pet',
-        kind: 'kb_account_ready',
-        ts: Date.now(),
-        uid,
-        prevUid,
-        switched,
-        ok: Boolean(result?.ok),
-      },
-      { touchLatest: false }
-    );
-    if (homeWindow && !homeWindow.isDestroyed()) {
-      try {
-        homeWindow.reload();
-      } catch (err) {
-        console.warn('[bili-pet] home reload after switch failed:', err?.message || err);
+    if (result.opsReady !== false) {
+      broadcastPetEvent(
+        {
+          v: 1,
+          source: 'bili-pet',
+          kind: 'kb_account_ready',
+          ts: Date.now(),
+          uid,
+          prevUid,
+          switched,
+          ok: true,
+        },
+        { touchLatest: false }
+      );
+      if (homeWindow && !homeWindow.isDestroyed()) {
+        try {
+          homeWindow.reload();
+        } catch (err) {
+          console.warn('[bili-pet] home reload after switch failed:', err?.message || err);
+        }
       }
-    }
-    if (notesWindow && !notesWindow.isDestroyed()) {
-      try {
-        notesWindow.reload();
-      } catch (err) {
-        console.warn('[bili-pet] notes reload after switch failed:', err?.message || err);
+      if (notesWindow && !notesWindow.isDestroyed()) {
+        try {
+          notesWindow.reload();
+        } catch (err) {
+          console.warn('[bili-pet] notes reload after switch failed:', err?.message || err);
+        }
       }
     }
   };
 
-  accountOpChain = accountOpChain.then(run, run).catch((err) => {
-    console.warn('[bili-pet] account store op failed:', err?.message || err);
-  });
+  accountOpChain = accountOpChain
+    .then(run, run)
+    .catch((err) => {
+      console.warn('[bili-pet] account store op failed:', err?.message || err);
+    })
+    .finally(() => {
+      if (accountReadyInFlightUid === uid && seq === accountOpSeq) {
+        accountReadyInFlightUid = null;
+      }
+    });
   await accountOpChain;
 }
 
 function onBridgeEvent(payload) {
   if (!payload || typeof payload !== 'object') return;
 
+  // Any bridge traffic proves the extension is alive
+  touchExtensionPresence(Number(payload.ts) || Date.now());
+  rememberBiliCookieFromPayload(payload);
+
   const kind = String(payload.kind || '');
+
+  if (kind === 'extension_heartbeat') {
+    const uid = payload.account?.uid || payload.uid || null;
+    // 只有「心跳明确没有 UID」才当登出。cookieOk 只影响 B 站写接口，不能拿来锁本地库。
+    if (!uid) {
+      const hadLiveSession = Boolean(
+        loadAccount().sessionLoggedIn || getActiveUid()
+      );
+      lockLocalSession('heartbeat_no_uid');
+      if (hadLiveSession) {
+        enqueueLogoutPurge('heartbeat_logged_out_push');
+      }
+      return;
+    }
+
+    unlockLocalSession(String(uid), payload);
+    return;
+  }
 
   if (kind === 'account_auth_cookie') {
     void handleAuthCookiePayload(payload).then((result) => {
@@ -825,9 +1219,10 @@ function onBridgeEvent(payload) {
     return;
   }
 
-  const gate = handleAccountPayload(payload);
-
+  // 账号事件才走绑定/登出；progress/heartbeat 等业务事件缺 uid 不能当成登出，
+  // 否则一看视频就把库锁死——这也是「插件正常却打不开」的主因。
   if (kind === 'account_login' || kind === 'account_logout' || kind === 'account_hello') {
+    const gate = handleAccountPayload(payload);
     if (kind === 'account_logout' || gate.status === 'logged_out') {
       flushStudyClock();
       studyClock = null;
@@ -846,51 +1241,41 @@ function onBridgeEvent(payload) {
       gate.uid || gate.account?.activeUid || '(none)'
     );
 
-    if (gate.ok && gate.uid && (gate.status === 'auto_bound' || gate.status === 'switched')) {
+    if (kind === 'account_logout' || gate.status === 'logged_out') {
+      lockLocalSession(
+        kind === 'account_logout' ? 'account_logout' : 'logged_out'
+      );
+      enqueueLogoutPurge(
+        kind === 'account_logout' ? 'logout_push' : 'logged_out_push'
+      );
+      return;
+    }
+
+    if (gate.ok && gate.uid && gate.status === 'auto_bound') {
+      setActiveUid(gate.uid);
+      setAccountOpsReady(true);
+      saveAccountSessionLoggedIn(gate.uid);
       void ensureAccountLocalStore(gate, payload);
-    } else if (gate.ok && gate.status === 'logged_in' && payload.cookieHeader) {
-      // 同账号重复 hello：只刷新 JWT，不换库、不全量 pull
-      void handleAuthCookiePayload(payload);
+    } else if (gate.ok && gate.uid && gate.status === 'switched') {
+      void ensureAccountLocalStore(gate, payload);
+    } else if (gate.ok && gate.status === 'logged_in') {
+      const wasLive =
+        Boolean(loadAccount().sessionLoggedIn) &&
+        getActiveUid() === gate.uid &&
+        isAccountOpsReady();
+      if (!wasLive) accountOpSeq += 1;
+      if (!getActiveUid() && gate.uid) {
+        setActiveUid(gate.uid);
+      }
+      setAccountOpsReady(true);
+      saveAccountSessionLoggedIn(gate.uid);
+      if (!wasLive) {
+        void ensureAccountLocalStore(gate, payload);
+      } else if (payload.cookieHeader) {
+        void handleAuthCookiePayload(payload);
+      }
     }
     return;
-  }
-
-  if (!gate.ok) {
-    broadcastPetEvent(
-      {
-        v: 1,
-        source: 'bili-pet',
-        kind: 'account_logged_out',
-        ts: Date.now(),
-        status: gate.status,
-        uid: gate.uid,
-        boundUid: gate.account?.activeUid || gate.account?.boundUid || null,
-        account: payload.account || { uid: gate.uid, loggedIn: false },
-      },
-      { touchLatest: false }
-    );
-    return;
-  }
-
-  if (gate.status === 'auto_bound' || gate.status === 'switched') {
-    void ensureAccountLocalStore(gate, payload);
-  }
-
-  if (gate.status === 'auto_bound') {
-    broadcastPetEvent(
-      {
-        v: 1,
-        source: 'bili-pet',
-        kind: 'account_login',
-        ts: Date.now(),
-        account: { uid: gate.uid, loggedIn: true },
-        bindStatus: 'auto_bound',
-        boundUid: gate.uid,
-        ok: true,
-      },
-      { touchLatest: false }
-    );
-    console.log('[bili-pet] account auto_bound', gate.uid);
   }
 
   broadcastPetEvent(payload);
@@ -902,6 +1287,18 @@ function onBridgeEvent(payload) {
   void notesOrganizer?.maybeHandle(payload);
 }//账号切换 + 本地分库 + 云同步编排（切号串行，避免 B/A 互相踩库）
 
+function saveAccountSessionLoggedIn(uid) {
+  const id = String(uid || '').trim();
+  if (!id) return;
+  saveAccount({
+    activeUid: id,
+    boundUid: id,
+    lastSeenUid: id,
+    lastSeenAt: Date.now(),
+    sessionLoggedIn: true,
+  });
+}
+
 ipcMain.handle('pet:getLatest', () => latestEvent);
 
 ipcMain.handle('pet:openNotesPage', () => openNotesWindow());
@@ -909,6 +1306,11 @@ ipcMain.handle('pet:openNotesPage', () => openNotesWindow());
 ipcMain.handle('pet:openChatPage', () => openChatWindow());
 
 ipcMain.handle('pet:gameAnswer', (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) {
+    notifyGateBlocked(bound.error, 'game_answer');
+    return { ok: false, error: bound.error || 'not_bound', message: gateMessage(bound.error) };
+  }
   const choice = payload?.choice ?? payload?.index;
   const result = answerGame(choice);
   return {
@@ -928,8 +1330,14 @@ ipcMain.handle('pet:gameStop', () => {
   return result;
 });
 
-ipcMain.handle('pet:goHome', (_event, opts) => goHome(opts || {}));
-
+ipcMain.handle('pet:goHome', (_event, opts) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) {
+    notifyGateBlocked(bound.error, 'go_home');
+    return { ok: false, error: bound.error || 'not_bound', message: gateMessage(bound.error) };
+  }
+  return goHome(opts || {});
+});
 
 function isNotesMetaQuestion(question) {
   const q = String(question || '');
@@ -1023,6 +1431,12 @@ function formatNotesContext(hits) {
 }//拼笔记函数
 
 ipcMain.handle('pet:chat', async (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) {
+    notifyGateBlocked(bound.error, 'chat');
+    return { ok: false, error: bound.error || 'not_bound', message: gateMessage(bound.error) };
+  }
+
   const raw = Array.isArray(payload.messages) ? payload.messages : [];
   const messages = raw
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
@@ -1036,6 +1450,13 @@ ipcMain.handle('pet:chat', async (_event, payload = {}) => {
   try {
     const gameResult = await tryHandleGameChat(question, currentVideoMeta());
     if (gameResult?.handled) {
+      if (/^\/game\b/i.test(question)) {
+        try {
+          learningPlanSkill.reset();
+        } catch {
+          /* ignore */
+        }
+      }
       return {
         ok: true,
         text: gameResult.message || '',
@@ -1046,6 +1467,23 @@ ipcMain.handle('pet:chat', async (_event, payload = {}) => {
     }
   } catch (err) {
     console.warn('[bili-pet] game chat failed:', err.message || err);
+  }
+
+  try {
+    const planResult = await tryHandlePlanChat(question, currentVideoMeta(), {
+      history: messages,
+    });
+    if (planResult?.handled) {
+      return {
+        ok: true,
+        text: planResult.message || (planResult.ok ? '已完成' : '操作失败'),
+        sources: [],
+        plan: true,
+        needsConfirm: Boolean(planResult.needsConfirm),
+      };
+    }
+  } catch (err) {
+    console.warn('[bili-pet] learning plan chat failed:', err.message || err);
   }
 
   try {
@@ -1103,6 +1541,8 @@ ipcMain.handle('pet:chat', async (_event, payload = {}) => {
 });//课程组内容切块
 
 ipcMain.handle('pet:notesLoad', (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) return { ok: false, error: bound.error || 'not_bound', doc: null };
   const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim();
   if (!bvid) return { ok: false, error: 'no_bvid', doc: null };
   const doc = loadNoteDoc(bvid);
@@ -1110,6 +1550,8 @@ ipcMain.handle('pet:notesLoad', (_event, payload = {}) => {
 });
 
 ipcMain.handle('pet:notesSave', (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) return { ok: false, error: bound.error || 'not_bound' };
   const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim();
   if (!bvid) return { ok: false, error: 'no_bvid' };
   const doc = saveNoteDoc(bvid, {
@@ -1128,6 +1570,11 @@ ipcMain.handle('pet:notesSave', (_event, payload = {}) => {
 
 ipcMain.on('pet:notesSaveSync', (event, payload = {}) => {
   try {
+    const bound = requireBoundAccount();
+    if (!bound.ok) {
+      event.returnValue = { ok: false, error: bound.error || 'not_bound' };
+      return;
+    }
     const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim();
     if (!bvid) {
       event.returnValue = { ok: false, error: 'no_bvid' };
@@ -1151,6 +1598,8 @@ ipcMain.on('pet:notesSaveSync', (event, payload = {}) => {
 });//不知道啥时候写的复杂逻辑函数，但是不敢动
 
 ipcMain.handle('pet:notesOrganize', async (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) return { ok: false, error: bound.error || 'not_bound' };
   const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim();
   if (!bvid) return { ok: false, error: 'no_bvid' };
   if (payload.bodyMd != null) {
@@ -1167,6 +1616,9 @@ ipcMain.handle('pet:notesOrganize', async (_event, payload = {}) => {
       : latestEvent && eventBvid(latestEvent) === bvid
         ? latestEvent
         : noteContext || latestEvent;
+  // #region agent log
+  fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'H',location:'canva.js:pet:notesOrganize',message:'organize ctx selection',data:{reqBvid:bvid,ctxKind:String(ctx?.kind||''),ctxBvid:String(eventBvid(ctx)||''),noteCtxBvid:String(eventBvid(noteContext)||''),latestKind:String(latestEvent?.kind||''),latestBvid:String(eventBvid(latestEvent)||''),noteFullLen:String(noteContext?.fullSubtitleText||'').trim().length,noteTranscriptLen:String(noteContext?.transcriptText||'').trim().length,ctxFullLen:String(ctx?.fullSubtitleText||'').trim().length,ctxTranscriptLen:String(ctx?.transcriptText||'').trim().length,bodyMdLen:String(payload.bodyMd||'').trim().length,usedNoteContext:Boolean(noteContext&&eventBvid(noteContext)===bvid)},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   const result = await notesOrganizer?.organizeOnce?.({
     payload: ctx,
     bodyMd: payload.bodyMd,
@@ -1177,6 +1629,8 @@ ipcMain.handle('pet:notesOrganize', async (_event, payload = {}) => {
 });//笔记整理函数
 
 ipcMain.handle('pet:notesSaveAsset', async (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) return { ok: false, error: bound.error || 'not_bound' };
   const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim() || '_draft';
   const dataUrl = String(payload.dataUrl || '');
   const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
@@ -1213,6 +1667,8 @@ ipcMain.handle('pet:notesSaveAsset', async (_event, payload = {}) => {
 });
 
 ipcMain.handle('pet:notesAssetDataUrl', (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) return { ok: false, error: bound.error || 'not_bound' };
   try {
     const src = String(payload.src || payload.url || '');
     if (!src.startsWith('bilinotes://')) {
@@ -1271,11 +1727,15 @@ if (gotTheLock) {
     {
       const acc = loadAccount();
       const uid = acc.activeUid || acc.boundUid;
+      setAccountOpsReady(false);
+      if (acc.sessionLoggedIn) {
+        saveAccount({ sessionLoggedIn: false, lastSeenAt: Date.now() });
+      }
+      if (getActiveUid()) setActiveUid(null);
+      else closeNotesDb();
       if (uid) {
-        setActiveUid(uid);
         console.log(
-          `[bili-pet] active Bilibili uid=${uid}` +
-            (acc.sessionLoggedIn ? ' (session logged in)' : ' (waiting browser login)')
+          `[bili-pet] remembered uid=${uid} — locked until extension proves live Bilibili login`
         );
       } else {
         console.log('[bili-pet] no active account yet — will bind on first Bilibili login');
@@ -1283,8 +1743,76 @@ if (gotTheLock) {
     }
 
     startCloudSync({
-      onBroadcast: (event) => broadcastPetEvent(event, { touchLatest: false }),
+      onBroadcast: (event) => {
+        broadcastPetEvent(event, { touchLatest: false });
+        // First-pull eventually succeeded via retry → refresh open KB windows
+        if (
+          event?.kind === 'sync_state' &&
+          event.status === 'account_switched' &&
+          event.opsReady &&
+          event.retried
+        ) {
+          broadcastPetEvent(
+            {
+              v: 1,
+              source: 'bili-pet',
+              kind: 'kb_account_ready',
+              ts: Date.now(),
+              uid: event.uid,
+              ok: true,
+              retried: true,
+            },
+            { touchLatest: false }
+          );
+        }
+      },
     });
+    try {
+      sweepOrphanLocalStores();
+    } catch (err) {
+      console.warn('[bili-pet] orphan sweep failed:', err?.message || err);
+    }
+
+    setPresenceChangeHandler(({ alive }) => {
+      if (alive) {
+        broadcastPetEvent(
+          {
+            v: 1,
+            source: 'bili-pet',
+            kind: 'extension_online',
+            ts: Date.now(),
+            ok: true,
+          },
+          { touchLatest: false }
+        );
+        return;
+      }
+      // 扩展掉线 = 软登出：推云 + 清库；恢复后须重新证明登录
+      const hadLiveSession = Boolean(
+        loadAccount().sessionLoggedIn || getActiveUid()
+      );
+      lockLocalSession('extension_offline');
+      if (hadLiveSession) {
+        enqueueLogoutPurge('extension_offline_push');
+      }
+      broadcastPetEvent(
+        {
+          v: 1,
+          source: 'bili-pet',
+          kind: 'extension_offline',
+          ts: Date.now(),
+          ok: false,
+          error: 'extension_offline',
+          message: gateMessage('extension_offline'),
+        },
+        { touchLatest: false }
+      );
+      console.log('[bili-pet] extension offline — soft logout (push+purge)');
+    });
+    const presenceTimer = setInterval(() => {
+      pollExtensionPresence();
+    }, 5000);
+    if (typeof presenceTimer.unref === 'function') presenceTimer.unref();
 
     createWindow();
     wireGamePetNotifier();

@@ -27,7 +27,6 @@ body {
 }
 
 #pet-sprite {
-    /* 宽高由 renderer 按素材原始像素等比设置，避免 contain 把带火/问号的整图连同水獭一起缩小 */
     width: auto;
     height: auto;
     cursor: grab;
@@ -54,7 +53,6 @@ body {
     animation: pet-shake 0.45s steps(4, end);
 }
 
-/* 登录/切号等待云端 pull：关掉 idle 浮动，由 JS 控制左右位移 */
 #pet-sprite.pet-dancing {
     animation: none;
     transition: transform 0.18s steps(2, end);
@@ -62,6 +60,33 @@ body {
 
 #pet-sprite.pet-dancing:hover {
     transform: none;
+}
+
+.pet-bubble {
+    position: absolute;
+    bottom: calc(50% + 52px);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 260px;
+    min-width: 120px;
+    padding: 8px 10px;
+    background: #fff8ef;
+    color: #3b2a1f;
+    border: 3px solid #3b2a1f;
+    box-shadow: 3px 3px 0 rgba(59, 42, 31, 0.35);
+    font-size: 9px;
+    line-height: 1.45;
+    letter-spacing: 0.02em;
+    text-align: center;
+    z-index: 2;
+    -webkit-app-region: no-drag;
+    pointer-events: none;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.pet-bubble[hidden] {
+    display: none !important;
 }
 
 @keyframes idle-float {

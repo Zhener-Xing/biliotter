@@ -72,6 +72,9 @@ function looksLikeCourseAction(question) {
   if (!q) return false;
   if (isAffirmative(q) && pendingConfirm) return true;
   if (isNegative(q) && pendingConfirm) return true;
+  if (/稍后再看|待看|晚点看|我的收藏|收藏夹/.test(q) && !/课程组|文件夹/.test(q)) {
+    return false;
+  }
   return /课程组|文件夹|加入.*课|放进|放到|新建.*课|创建.*课|建个.*课|建一个.*课|在里面|放进去|保存.*笔记/.test(
     q
   );

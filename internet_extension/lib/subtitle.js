@@ -96,6 +96,10 @@ const BiliSubtitle = (() => {
       page: target?.page || 1,
       part: target?.part || view.title,
       duration: Number(view.duration) || Number(target?.duration) || 0,
+      tid: view.tid ?? null,
+      tname: view.tname || '',
+      tid_v2: view.tid_v2 ?? view.tidv2 ?? null,
+      tname_v2: view.tname_v2 || view.tnamev2 || '',
       pages,
     };
   }

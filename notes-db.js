@@ -95,8 +95,129 @@ function setActiveUid(uid) {
   closeNotesDb();
   activeUid = next;
   activeDbFile = nextFile;
-  getDb();
+  if (next) getDb();
   return { ok: true, uid: next, dbFile: nextFile, switched: true };
+}
+
+function localDbExists(uid) {
+  const id = normalizeUid(uid);
+  if (!id) return false;
+  return fs.existsSync(dbPathForUid(id));
+}
+
+/** List bvids in currently mounted DB (for asset cleanup). */
+function listLocalNoteBvids() {
+  try {
+    const rows = getDb().prepare('SELECT bvid FROM cornell_notes').all();
+    return rows.map((r) => String(r.bvid || '').trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function readBvidsFromUidFile(uid) {
+  const id = normalizeUid(uid);
+  if (!id) return [];
+  if (activeUid === id && db) return listLocalNoteBvids();
+  const file = dbPathForUid(id);
+  if (!fs.existsSync(file)) return [];
+  let temp = null;
+  try {
+    temp = new DatabaseSync(file);
+    const rows = temp.prepare('SELECT bvid FROM cornell_notes').all();
+    return rows.map((r) => String(r.bvid || '').trim()).filter(Boolean);
+  } catch {
+    return [];
+  } finally {
+    try {
+      temp?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function removeNoteAssetsForBvids(bvids) {
+  const removed = [];
+  for (const bvid of bvids || []) {
+    const key = safeAssetKey(bvid);
+    if (!key) continue;
+    const dir = path.join(ASSETS_DIR, key);
+    try {
+      if (fs.existsSync(dir)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed.push(dir);
+      }
+    } catch (err) {
+      console.warn('[bili-pet] asset purge failed:', dir, err.message || err);
+    }
+  }
+  return removed;
+}
+
+function hasLocalKbData() {
+  try {
+    const database = getDb();
+    const note = database.prepare('SELECT 1 AS ok FROM cornell_notes LIMIT 1').get();
+    if (note) return true;
+    const study = database.prepare('SELECT 1 AS ok FROM study_days LIMIT 1').get();
+    if (study) return true;
+    const group = database.prepare('SELECT 1 AS ok FROM course_groups LIMIT 1').get();
+    return Boolean(group);
+  } catch {
+    return false;
+  }
+}
+
+/** Discover uid SQLite files on disk (non-active leftovers). */
+function listUidDbFilesOnDisk() {
+  const out = [];
+  let names = [];
+  try {
+    names = fs.readdirSync(__dirname);
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    const m = /^\.bili-pet-notes-(\d+)\.db$/.exec(name);
+    if (!m) continue;
+    out.push({ uid: m[1], file: path.join(__dirname, name) });
+  }
+  return out;
+}
+
+/**
+ * Close DB if active, delete this uid's SQLite files (+ wal/shm) and note assets.
+ */
+function purgeUidLocalStore(uid) {
+  const id = normalizeUid(uid);
+  if (!id) return { ok: false, error: 'no_uid' };
+  const file = dbPathForUid(id);
+  const assetBvids = readBvidsFromUidFile(id);
+
+  if (activeUid === id) {
+    closeNotesDb();
+    activeUid = null;
+    activeDbFile = LEGACY_DB_FILE;
+  }
+
+  const removedAssets = removeNoteAssetsForBvids(assetBvids);
+  const removed = [...removedAssets];
+  for (const p of [file, `${file}-wal`, `${file}-shm`]) {
+    try {
+      if (fs.existsSync(p)) {
+        fs.unlinkSync(p);
+        removed.push(p);
+      }
+    } catch (err) {
+      console.warn('[bili-pet] purge unlink failed:', p, err.message || err);
+      return { ok: false, error: err.message || String(err), uid: id };
+    }
+  }
+  console.log(
+    `[bili-pet] purged local store uid=${id} files=${removed.length} assets=${removedAssets.length}`
+  );
+  return { ok: true, uid: id, removed, removedAssets };
 }
 
 function normalizeMode(mode) {
@@ -165,6 +286,9 @@ function ensureSyncTables(database) {
 
 function getDb() {
   if (db) return db;
+  if (!normalizeUid(activeUid)) {
+    throw new Error('no_active_uid');
+  }
   db = new DatabaseSync(activeDbFile);
   db.exec(`
     PRAGMA journal_mode = WAL;
@@ -2170,9 +2294,15 @@ module.exports = {
   deleteNoteDoc,
   closeNotesDb,
   setActiveUid,
+  purgeUidLocalStore,
   getActiveUid,
   getActiveDbFile,
   dbPathForUid,
+  localDbExists,
+  listLocalNoteBvids,
+  hasLocalKbData,
+  listUidDbFilesOnDisk,
+  removeNoteAssetsForBvids,
   setOnLocalWriteHook,
   markPending,
   listPending,

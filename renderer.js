@@ -1,4 +1,5 @@
 const petSprite = document.getElementById('pet-sprite');
+const petBubble = document.getElementById('pet-bubble');
 
 const EXIT_VIDEO_REASONS = new Set([
   'pagehide',
@@ -6,6 +7,13 @@ const EXIT_VIDEO_REASONS = new Set([
   'window_blur',
   'route_change',
   'switch_bvid',
+]);
+
+/** 仅切换浏览器页面/标签时播 annoyed；切应用、关会话等不再 annoyed */
+const ANNOYED_REASONS = new Set([
+  'tab_hidden',
+  'pagehide',
+  'route_change',
 ]);
 
 const PET_DISPLAY_SCALE = 96 / 101;
@@ -42,12 +50,12 @@ const DANCE_BUFFER = [
 const FRAME_MS = 500;
 const DANCE_FRAME_MS = 200;
 const DOUBLE_CLICK_MS = 280;
+const BUBBLE_MS = 4200;
+const DANCE_MAX_MS = 5000;
 
 const SYNC_BUFFER_START = new Set([
-  'switching',
-  'syncing_login',
 ]);
-const SYNC_BUFFER_PULL_REASONS = new Set(['switch_pull', 'login_pull']);
+const SYNC_BUFFER_PULL_REASONS = new Set([]);
 
 let baseAnim = 'wait';
 let pointing = false;
@@ -58,6 +66,39 @@ let frameIndex = 0;
 let frameTimer = null;
 let currentSrc = '';
 let clickTimer = null;
+let bubbleTimer = null;
+let danceCapTimer = null;
+
+const GATE_MESSAGES = {
+  extension_offline: '浏览器插件未在线，请打开扩展并保持 B 站登录',
+  not_bound: '请先登录 B 站账号',
+  syncing: '正在同步知识库，请稍候…',
+  waiting_auth: '正在用 B 站登录态连接云端…',
+  waiting_auth_uid_match: '正在用 B 站登录态连接云端…',
+  waiting_cookie: '请打开已登录的 bilibili.com，以便同步知识库',
+  auth_failed: '云端鉴权失败，请刷新 B 站登录后重试',
+  not_logged_in: '云端鉴权失败，请刷新 B 站登录后重试',
+  pull_timeout: '云端同步超时，正在重试…',
+  pull_error: '云端同步失败，正在重试…',
+};
+
+function showPetBubble(text, ms = BUBBLE_MS) {
+  if (!petBubble) return;
+  const msg = String(text || '').trim();
+  if (!msg) return;
+  petBubble.textContent = msg;
+  petBubble.hidden = false;
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => {
+    petBubble.hidden = true;
+    bubbleTimer = null;
+  }, ms);
+}
+
+function gateBubbleText(error, message) {
+  if (message) return String(message);
+  return GATE_MESSAGES[error] || GATE_MESSAGES.not_bound;
+}
 
 for (const step of DANCE_BUFFER) {
   const img = new Image();
@@ -128,9 +169,21 @@ function startDanceBuffer() {
     frameIndex = (frameIndex + 1) % DANCE_BUFFER.length;
     applyDanceFrame(DANCE_BUFFER[frameIndex]);
   }, DANCE_FRAME_MS);
+  if (danceCapTimer) clearTimeout(danceCapTimer);
+  danceCapTimer = setTimeout(() => {
+    danceCapTimer = null;
+    if (syncBuffering) {
+      stopDanceBuffer();
+      showPetBubble(GATE_MESSAGES.pull_timeout);
+    }
+  }, DANCE_MAX_MS);
 }
 
 function stopDanceBuffer() {
+  if (danceCapTimer) {
+    clearTimeout(danceCapTimer);
+    danceCapTimer = null;
+  }
   if (!syncBuffering) return;
   syncBuffering = false;
   stopFrameLoop();
@@ -235,11 +288,17 @@ function playAnnoyedOnce() {
 }
 
 async function openNotesPage() {
-  await window.biliPet?.openNotesPage?.();
+  const result = await window.biliPet?.openNotesPage?.();
+  if (result && result.ok === false) {
+    showPetBubble(gateBubbleText(result.error, result.message));
+  }
 }
 
 async function goHome() {
-  await window.biliPet?.goHome?.();
+  const result = await window.biliPet?.goHome?.();
+  if (result && result.ok === false) {
+    showPetBubble(gateBubbleText(result.error, result.message));
+  }
 }
 
 function handlePetClick() {
@@ -259,33 +318,24 @@ function handlePetClick() {
 }
 
 function shouldStartAccountBuffer(payload) {
-  const bind = String(payload?.bindStatus || '');
-  if (bind === 'switched' || bind === 'auto_bound') return true;
-  const status = String(payload?.status || '');
-  if (SYNC_BUFFER_START.has(status)) return true;
-  const reason = String(payload?.reason || '');
-  return status === 'pulling' && SYNC_BUFFER_PULL_REASONS.has(reason);
+  // 立即打开：登录/同步不再开跳舞缓冲
+  return false;
 }
 
 function shouldStopAccountBuffer(payload) {
   const kind = String(payload?.kind || '');
-  if (kind === 'account_switched' || kind === 'kb_account_ready') return true;
+  if (kind === 'kb_account_ready' || kind === 'account_switched' || kind === 'local_ready') {
+    return true;
+  }
   const status = String(payload?.status || '');
   if (
     status === 'account_switched' ||
+    status === 'local_ready' ||
+    status === 'ready' ||
     status === 'pull_error' ||
-    status === 'auth_error'
-  ) {
-    return true;
-  }
-  // 无云端 / 未拿到 token：onAccountReady 会 ready，但仍以 canva 的 account_switched 为准；
-  // 这里只作为兜底，避免极端情况下一直跳。
-  const reason = String(payload?.reason || '');
-  if (
-    status === 'ready' &&
-    (reason === 'local_only' ||
-      reason === 'waiting_auth' ||
-      reason === 'waiting_auth_uid_match')
+    status === 'pull_timeout' ||
+    status === 'auth_error' ||
+    status === 'first_pull_blocked'
   ) {
     return true;
   }
@@ -325,7 +375,9 @@ function handleEvent(payload) {
         playQuestionOnce();
       } else if (EXIT_VIDEO_REASONS.has(reason) || breakType === 'exit_video') {
         setWatching(false);
-        playAnnoyedOnce();
+        if (ANNOYED_REASONS.has(reason)) {
+          playAnnoyedOnce();
+        }
       }
 
       petSprite?.classList.add('pet-alert');
@@ -339,7 +391,6 @@ function handleEvent(payload) {
 
     case 'session_end':
       setWatching(false);
-      playAnnoyedOnce();
       break;
 
     case 'account_hello':
@@ -359,23 +410,73 @@ function handleEvent(payload) {
     }
 
     case 'kb_account_ready':
+      stopDanceBuffer();
+      break;
+
     case 'account_switched':
       stopDanceBuffer();
       break;
 
     case 'sync_state': {
-      if (shouldStartAccountBuffer(payload)) {
-        startDanceBuffer();
+      if (payload.status === 'local_ready' || payload.status === 'account_switched') {
+        stopDanceBuffer();
       } else if (shouldStopAccountBuffer(payload)) {
         stopDanceBuffer();
       }
       break;
     }
 
+    case 'pet_gate_blocked':
+      showPetBubble(gateBubbleText(payload.error, payload.message));
+      petSprite?.classList.add('pet-alert');
+      setTimeout(() => petSprite?.classList.remove('pet-alert'), 1200);
+      break;
+
+    case 'extension_offline':
+      setWatching(false);
+      stopDanceBuffer();
+      showPetBubble(gateBubbleText('extension_offline', payload.message));
+      petSprite?.classList.add('pet-alert');
+      setTimeout(() => petSprite?.classList.remove('pet-alert'), 1200);
+      break;
+
+    case 'extension_online':
+      break;
+
     case 'account_logout':
     case 'account_logged_out':
       setWatching(false);
+      showPetBubble('已退出登录');
       break;
+
+    case 'account_purged':
+      setWatching(false);
+      stopDanceBuffer();
+      break;
+
+    case 'purge_blocked':
+    case 'switch_blocked': {
+      // 后台清旧号失败：不打扰当前体验
+      const purgeReason = String(payload.purgeReason || payload.reason || '');
+      if (
+        purgeReason === 'switch_push_old' ||
+        purgeReason === 'orphan_sweep' ||
+        purgeReason === 'background_purge' ||
+        purgeReason.includes('switch_push')
+      ) {
+        break;
+      }
+      stopDanceBuffer();
+      if (payload.kind === 'switch_blocked') {
+        showPetBubble('切号未完成，仍保留当前账号');
+      }
+      console.warn(
+        '[bili-pet]',
+        payload.kind,
+        payload.error || payload.reason || 'blocked'
+      );
+      break;
+    }
 
     case 'account_mismatch':
       setWatching(false);

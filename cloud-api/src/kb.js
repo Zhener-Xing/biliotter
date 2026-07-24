@@ -319,4 +319,10 @@ async function handleKbPush(req, res) {
   res.json({ ok: true, uid, revision });
 }
 
-module.exports = { handleKbChanges, handleKbPush, getRevision };
+async function handleKbRevision(req, res) {
+  const uid = req.uid;
+  const revision = await getRevision(uid);
+  res.json({ ok: true, uid, revision });
+}
+
+module.exports = { handleKbChanges, handleKbPush, handleKbRevision, getRevision };

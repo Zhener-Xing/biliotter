@@ -4,6 +4,7 @@ process.env.BILI_PET_SKIP_LEGACY_MIGRATE = '1';
 const fs = require('fs');
 const {
   setActiveUid,
+  getActiveUid,
   saveNoteDoc,
   loadNoteDoc,
   clearAllPending,
@@ -12,8 +13,15 @@ const {
   closeNotesDb,
   dbPathForUid,
   hasPendingSync,
+  purgeUidLocalStore,
 } = require('../notes-db');
-const { handleAccountPayload, saveAccount } = require('../account-bind');
+const {
+  handleAccountPayload,
+  saveAccount,
+  loadAccount,
+  clearBinding,
+  commitBinding,
+} = require('../account-bind');
 
 const uidA = '100001';
 const uidB = '100002';
@@ -65,6 +73,9 @@ gate = handleAccountPayload({
 });
 assert(gate.status === 'switched', `expected switched got ${gate.status}`);
 assert(gate.prevUid === uidA, 'prevUid should be A');
+// Switch is detected but activeUid must stay on A until purge+commit
+assert(gate.account.activeUid === uidA, 'activeUid must remain A until commitBinding');
+
 setActiveUid(uidB);
 assert(!loadNoteDoc('BVverifyAAA1'), 'B should not see A note');
 saveNoteDoc('BVverifyBBB1', {
@@ -101,7 +112,22 @@ applyRemoteChanges({
 });
 assert(loadNoteDoc('BVverifyRemote1')?.title === 'Remote', 'remote apply failed');
 
+// purge: clear pending then delete local store
 clearAllPending();
+assert(!hasPendingSync(), 'pending should be empty before purge');
+const dbFile = dbPathForUid(uidA);
+assert(fs.existsSync(dbFile), 'A db should exist before purge');
+const purged = purgeUidLocalStore(uidA);
+assert(purged.ok, `purge failed: ${purged.error}`);
+assert(!fs.existsSync(dbFile), 'A db should be deleted after purge');
+assert(getActiveUid() == null, 'activeUid cleared after purge of active store');
+clearBinding();
+assert(loadAccount().activeUid == null, 'binding cleared');
+
+commitBinding(uidB);
+setActiveUid(uidB);
+assert(loadNoteDoc('BVverifyBBB1')?.title === 'B note', 'B note should still exist');
+
 closeNotesDb();
 cleanup();
 

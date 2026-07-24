@@ -51,6 +51,8 @@ function saveAccount(patch = {}) {
   cache = { ...prev, ...patch };
   if (cache.activeUid) {
     cache.boundUid = cache.activeUid;
+  } else if (Object.prototype.hasOwnProperty.call(patch, 'activeUid') && !patch.activeUid) {
+    cache.boundUid = null;
   }
   try {
     fs.writeFileSync(ACCOUNT_FILE, `${JSON.stringify(cache, null, 2)}\n`, 'utf8');
@@ -58,6 +60,33 @@ function saveAccount(patch = {}) {
     console.warn('[bili-pet] account save failed:', err.message || err);
   }
   return cache;
+}
+
+/** After successful local purge on logout. */
+function clearBinding() {
+  return saveAccount({
+    activeUid: null,
+    boundUid: null,
+    boundAt: null,
+    lastSeenUid: null,
+    lastSeenAt: Date.now(),
+    sessionLoggedIn: false,
+  });
+}
+
+/** Commit active uid after first bind or successful switch purge. */
+function commitBinding(uid) {
+  const id = normalizeUid(uid);
+  if (!id) return clearBinding();
+  const now = Date.now();
+  return saveAccount({
+    activeUid: id,
+    boundUid: id,
+    boundAt: now,
+    lastSeenUid: id,
+    lastSeenAt: now,
+    sessionLoggedIn: true,
+  });
 }
 
 function extractUid(payload) {
@@ -83,6 +112,7 @@ function handleAccountPayload(payload) {
   const prevUid = account.activeUid || account.boundUid || null;
 
   if (kind === 'account_logout') {
+    // Keep activeUid until flushAndPurgeUid succeeds (canva clearBinding).
     saveAccount({
       lastSeenUid: null,
       lastSeenAt: now,
@@ -130,9 +160,8 @@ function handleAccountPayload(payload) {
       };
     }
     if (prevUid !== uid) {
+      // Detect switch but do NOT commit activeUid until old store is purged.
       saveAccount({
-        activeUid: uid,
-        boundUid: uid,
         lastSeenUid: uid,
         lastSeenAt: now,
         sessionLoggedIn: true,
@@ -189,8 +218,6 @@ function handleAccountPayload(payload) {
 
   if (prevUid !== uid) {
     saveAccount({
-      activeUid: uid,
-      boundUid: uid,
       lastSeenUid: uid,
       lastSeenAt: now,
       sessionLoggedIn: true,
@@ -223,6 +250,7 @@ module.exports = {
   normalizeUid,
   loadAccount,
   saveAccount,
+  clearBinding,
+  commitBinding,
   handleAccountPayload,
 };
-//！！！！账号绑定函数，但是逻辑还存在问题

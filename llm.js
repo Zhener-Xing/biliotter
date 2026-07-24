@@ -21,6 +21,7 @@ async function chatCompletion({
   max_tokens = 120,
   timeoutMs,
   jsonMode = false,
+  _attempt = 0,
 } = {}) {
   const apiKey = String(process.env.LLM_API_KEY || '').trim();
   const base = String(process.env.LLM_API_BASE || 'https://api.openai.com/v1').replace(
@@ -68,16 +69,54 @@ async function chatCompletion({
           max_tokens,
           timeoutMs: waitMs,
           jsonMode: false,
+          _attempt,
+        });
+      }
+      // 限流/过载：短暂退避后重试一次
+      if (_attempt < 1 && (res.status === 429 || res.status >= 500)) {
+        clearTimeout(timer);
+        await new Promise((r) => setTimeout(r, 400 + Math.random() * 400));
+        return chatCompletion({
+          messages,
+          max_tokens,
+          timeoutMs: waitMs,
+          jsonMode,
+          _attempt: _attempt + 1,
         });
       }
       throw new Error(`LLM HTTP ${res.status}: ${detail}`);
     }
 
-    const text = data?.choices?.[0]?.message?.content;
-    if (!text || typeof text !== 'string') {
-      throw new Error('LLM 返回空内容');
+    const choice = data?.choices?.[0];
+    let text = choice?.message?.content;
+    // 部分接口会返回 content 数组（多段）
+    if (Array.isArray(text)) {
+      text = text
+        .map((part) => (typeof part === 'string' ? part : part?.text || ''))
+        .join('');
     }
-    return String(text).trim();
+    if (typeof text === 'string') text = text.trim();
+    if (!text) {
+      const reason = choice?.finish_reason || choice?.finishReason || '';
+      const refusal = choice?.message?.refusal || data?.error?.message || '';
+      // 空内容常见于并发过载/代理抖动：重试一次
+      if (_attempt < 1) {
+        clearTimeout(timer);
+        await new Promise((r) => setTimeout(r, 350 + Math.random() * 350));
+        return chatCompletion({
+          messages,
+          max_tokens,
+          timeoutMs: waitMs,
+          jsonMode,
+          _attempt: _attempt + 1,
+        });
+      }
+      const hint = [reason && `finish=${reason}`, refusal && `refusal=${refusal}`]
+        .filter(Boolean)
+        .join(' ');
+      throw new Error(hint ? `LLM 返回空内容（${hint}）` : 'LLM 返回空内容');
+    }
+    return text;
   } catch (err) {
     if (err?.name === 'AbortError') {
       throw new Error(`LLM 请求超时（>${waitMs}ms）`);
@@ -364,6 +403,9 @@ function createNotesOrganizer(hooks = {}) {
       ev.modelInput?.context?.text ||
       ev.currentSubtitle?.content ||
       '';
+    // #region agent log
+    fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'F',location:'llm.js:organizeOnce',message:'organize content check',data:{bvid:key,kind:String(ev.kind||''),userBodyLen:userBodyMd.trim().length,prevAiLen:previousAiMd.trim().length,transcriptLen:String(transcript||'').length,contextLen:String(context||'').trim().length,fullSubLen:String(ev.fullSubtitleText||'').trim().length,rawTranscriptLen:String(ev.transcriptText||'').trim().length,hasModelInput:Boolean(ev.modelInput),subtitleStatus:ev.subtitleStatus||null,sourceBodyLen:String(sourceBody||'').length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (!userBodyMd.trim() && !previousAiMd.trim() && !transcript && !context) {
       hooks.onStatus?.('没有可整理的内容');
       return { ok: false, error: 'empty' };

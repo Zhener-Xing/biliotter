@@ -2,6 +2,13 @@
   const cfg = BILI_PET_CONFIG;
   const schema = BiliSchema;
 
+  /** 知识区 / 学习相关分区（含 v1、v2 tid） */
+  const STUDY_ZONE_TIDS = new Set([
+    36, 201, 124, 228, 207, 208, 209, 229, 122, 39, 96, 98,
+    1010, 2084, 2085, 2086, 2087, 2088, 2089, 2090, 2091, 2092, 2093, 2094, 2095,
+  ]);
+  const STUDY_ZONE_RE = /学习|知识|课堂/;
+
   const state = {
     enabled: true,
     sessionId: null,
@@ -11,6 +18,8 @@
     owner: '',
     /** resolveCid 精简字段，供 buildModelInput */
     videoMeta: null,
+    /** 是否学习相关分区（未知时为 null） */
+    studyRelated: null,
     subtitlePack: null,
     /** 本片已看过的字幕，拼成一条长串 */
     transcript: '',
@@ -24,6 +33,16 @@
     subtitleRetries: 0,
     loadToken: 0,
   };
+
+  function isStudyRelatedMeta(meta = {}) {
+    const tid = Number(meta.tid);
+    const tidV2 = Number(meta.tid_v2 ?? meta.tidV2);
+    if (STUDY_ZONE_TIDS.has(tid) || STUDY_ZONE_TIDS.has(tidV2)) return true;
+    const labels = [meta.tname, meta.tname_v2 ?? meta.tnameV2]
+      .map((s) => String(s || ''))
+      .join(' ');
+    return STUDY_ZONE_RE.test(labels);
+  }
 
   function parseBvid(url = location.href) {
     const m = url.match(/\/video\/(BV[\w]+)/i);
@@ -79,6 +98,7 @@
 
   function getContext() {
     const el = state.videoEl;
+    const meta = state.videoMeta || {};
     return {
       sessionId: state.sessionId,
       bvid: state.bvid,
@@ -88,6 +108,11 @@
       // 尚无 video 时视为暂停，避免误报「播放中滑动」
       paused: el ? Boolean(el.paused) : true,
       hasVideo: Boolean(el),
+      tid: meta.tid ?? null,
+      tname: meta.tname || '',
+      tid_v2: meta.tid_v2 ?? null,
+      tname_v2: meta.tname_v2 || '',
+      studyRelated: state.studyRelated,
     };
   }//获取上下文
 
@@ -174,6 +199,7 @@
       state.cid = meta.cid;
       state.title = meta.title;
       state.owner = meta.owner || '';
+      state.studyRelated = isStudyRelatedMeta(meta);
       state.videoMeta = {
         bvid: meta.bvid,
         aid: meta.aid,
@@ -183,6 +209,11 @@
         page: meta.page,
         part: meta.part,
         duration: meta.duration,
+        tid: meta.tid ?? null,
+        tname: meta.tname || '',
+        tid_v2: meta.tid_v2 ?? null,
+        tname_v2: meta.tname_v2 || '',
+        studyRelated: state.studyRelated,
       };
 
       const pack = await BiliSubtitle.load(lockedBvid, meta.cid, { force });
@@ -192,6 +223,10 @@
       // 换轨/重载时必须清空旧长串，否则会把串台内容拼进去
       resetTranscript();
       state.subtitlePack = pack;
+
+      // #region agent log
+      fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'J',location:'video.js:ensureSubtitles',message:'subtitle pack loaded',data:{bvid:lockedBvid,status:pack?.status||null,bodyLen:pack?.body?.length||0,fullTextLen:String(pack?.fullText||'').length,lan:pack?.meta?.lan||null,needLogin:Boolean(pack?.meta?.needLogin)},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
 
       send(
         schema.envelope('session_meta', {
@@ -375,6 +410,7 @@
     state.bvid = bvid;
     state.cid = null;
     state.videoMeta = null;
+    state.studyRelated = null;
     state.sessionId = schema.newSessionId(bvid);
     state.subtitlePack = null;
     state.lastLineKey = '';

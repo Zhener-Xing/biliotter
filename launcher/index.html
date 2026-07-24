@@ -1665,9 +1665,9 @@
         function interruptLevel(count) {
           const n = Number(count) || 0;
           if (n <= 0) return 0;
-          if (n <= 2) return 1;
-          if (n <= 5) return 2;
-          if (n <= 10) return 3;
+          if (n <= 15) return 1;
+          if (n <= 25) return 2;
+          if (n <= 34) return 3;
           return 4;
         }
 
@@ -3336,49 +3336,115 @@
           if (toastMsg) showToast(toastMsg);
         }
 
+        let lastKbSwitchUid = null;
+        let lastKbSwitchAt = 0;
+
         if (window.biliPet && typeof window.biliPet.onEvent === "function") {
           window.biliPet.onEvent(function (payload) {
             const kind = String((payload && payload.kind) || "");
             const status = String((payload && payload.status) || "");
             const reason = String((payload && payload.reason) || "");
             const bindStatus = String((payload && payload.bindStatus) || "");
+            const purgeReason = String((payload && payload.purgeReason) || "");
+            const eventUid = String(
+              (payload && (payload.uid || payload.boundUid || payload.activeUid)) || ""
+            );
 
-            // 切号/登录同步中：先别刷列表
+            // 后台清旧号 / 同步重试：不打断当前账号 UI
+            if (
+              kind === "purge_blocked" ||
+              (kind === "sync_state" && status === "purge_blocked")
+            ) {
+              if (
+                purgeReason === "switch_push_old" ||
+                purgeReason === "orphan_sweep" ||
+                purgeReason === "background_purge" ||
+                String(reason).indexOf("switch_push") === 0
+              ) {
+                return;
+              }
+              showToast("未同步完成，本地数据未删除");
+              return;
+            }
+
+            if (kind === "switch_blocked" || (kind === "sync_state" && status === "switch_blocked")) {
+              showToast("切号失败：未同步完成，仍保留当前账号数据");
+              return;
+            }
+
+            // 切号已完成：只刷新一次，忽略重复 account_switched / kb_account_ready / ready
+            if (
+              kind === "account_switched" ||
+              kind === "kb_account_ready" ||
+              (kind === "sync_state" &&
+                (status === "account_switched" || status === "local_ready"))
+            ) {
+              if (payload && payload.ok === false) {
+                showToast("切号失败：未同步完成，仍保留当前账号数据");
+                return;
+              }
+              const now = Date.now();
+              if (
+                eventUid &&
+                eventUid === lastKbSwitchUid &&
+                now - lastKbSwitchAt < 8000
+              ) {
+                // 同账号短时间内重复事件：静默刷新列表，不再弹 toast
+                void loadList();
+                void loadCourses();
+                return;
+              }
+              lastKbSwitchUid = eventUid || lastKbSwitchUid;
+              lastKbSwitchAt = now;
+              refreshKnowledgeBaseUi("已切换账号知识库");
+              return;
+            }
+
+            if (kind === "account_purged") {
+              // 旧号后台清除成功：不要刷「已退出」干扰当前账号
+              if (
+                purgeReason === "switch_push_old" ||
+                purgeReason === "orphan_sweep" ||
+                purgeReason === "background_purge"
+              ) {
+                return;
+              }
+              refreshKnowledgeBaseUi("已退出账号，本地知识库已清除");
+              return;
+            }
+
+            if (kind === "extension_offline") {
+              showToast("浏览器插件未在线，知识库已锁定");
+              return;
+            }
+            if (kind === "extension_online") {
+              showToast("插件已连接");
+              return;
+            }
+
+            // 登录同步提示只保留真正切号瞬间；后台 retry 不再弹
             if (
               (kind === "account_login" || kind === "account_hello") &&
               (bindStatus === "switched" || bindStatus === "auto_bound")
             ) {
-              showToast("正在同步知识库…");
+              showToast("正在切换账号…");
               return;
             }
             if (
               kind === "sync_state" &&
-              (status === "switching" ||
-                status === "syncing_login" ||
-                (status === "pulling" &&
-                  (reason === "switch_pull" || reason === "login_pull")))
+              status === "switching"
             ) {
-              showToast("正在同步知识库…");
+              showToast("正在切换账号…");
               return;
             }
-
-            if (
-              kind === "account_switched" ||
-              kind === "kb_account_ready" ||
-              (kind === "sync_state" && status === "account_switched")
-            ) {
-              refreshKnowledgeBaseUi("已切换账号知识库");
-              return;
-            }
-
             if (
               kind === "sync_state" &&
-              status === "ready" &&
-              (reason === "local_only" ||
-                reason === "waiting_auth" ||
-                reason === "waiting_auth_uid_match")
+              (status === "syncing_login" ||
+                status === "pulling" ||
+                status === "first_pull_blocked" ||
+                status === "ready")
             ) {
-              refreshKnowledgeBaseUi("已切换账号知识库");
+              return;
             }
           });
         }

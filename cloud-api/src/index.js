@@ -4,7 +4,7 @@ require('dotenv').config();
 
 const express = require('express');
 const { authMiddleware, handleAuthBili } = require('./auth');
-const { handleKbChanges, handleKbPush } = require('./kb');
+const { handleKbChanges, handleKbPush, handleKbRevision } = require('./kb');
 
 const app = express();
 app.use(express.json({ limit: '12mb' }));
@@ -16,6 +16,13 @@ app.get('/health', (_req, res) => {
 app.post('/auth/bili', (req, res) => {
   handleAuthBili(req, res).catch((err) => {
     console.error('[cloud-api] auth/bili', err.message || err);
+    res.status(500).json({ ok: false, error: 'server_error' });
+  });
+});
+
+app.get('/kb/revision', authMiddleware, (req, res) => {
+  handleKbRevision(req, res).catch((err) => {
+    console.error('[cloud-api] kb/revision', err.message || err);
     res.status(500).json({ ok: false, error: 'server_error' });
   });
 });

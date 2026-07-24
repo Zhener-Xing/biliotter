@@ -44,9 +44,7 @@
         clearTimeout(timer);
       }
     }
-    /**
-     * Set the current provider to the fastest provider found by `getFastestProvider`.
-     */
+    
     async findFastestProvider(timeout, path) {
       this.provider = await this.getFastestProvider(timeout, path);
       return this.provider;

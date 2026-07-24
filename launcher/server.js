@@ -22,9 +22,13 @@ const {
   saveCourseMindmap,
   listStudyActivity,
   getStudyDay,
+  getActiveUid,
   ASSETS_DIR,
 } = require('../notes-db');
 const { generateCourseMindmap } = require('../course-mindmap');
+const { loadAccount } = require('../account-bind');
+const { isExtensionAlive } = require('../extension-presence');
+const { isAccountOpsReady, gateMessage } = require('../session-gate');
 
 const HOST = '127.0.0.1';
 const PORT = 39262;
@@ -33,6 +37,18 @@ const HOME_DIR = __dirname;
 
 /** @type {import('http').Server | null} */
 let homeServer = null;
+
+function requireBoundAccount() {
+  const uid = getActiveUid();
+  const acc = loadAccount();
+  if (!isExtensionAlive()) {
+    return { ok: false, error: 'extension_offline' };
+  }
+  if (!uid || !acc.sessionLoggedIn) {
+    return { ok: false, error: 'not_bound' };
+  }
+  return { ok: true, uid };
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -124,6 +140,13 @@ function serveStatic(req, res, urlPath) {
 async function handleApi(req, res, urlPath) {
   if (req.method === 'GET' && urlPath === '/api/status') {
     sendJson(res, 200, { ok: true, service: 'bili-pet-home' });
+    return;
+  }
+
+  const bound = requireBoundAccount();
+  if (!bound.ok) {
+    const message = gateMessage(bound.error);
+    sendJson(res, 401, { ok: false, error: bound.error, message });
     return;
   }
 
