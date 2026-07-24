@@ -18,3 +18,4 @@ const BILI_PET_CONFIG = {
 };
 
 globalThis.BILI_PET_CONFIG = BILI_PET_CONFIG;
+//接口文件，不要动

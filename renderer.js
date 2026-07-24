@@ -8,7 +8,6 @@ const EXIT_VIDEO_REASONS = new Set([
   'switch_bvid',
 ]);
 
-/** look.png 高 101px 时显示约 96px；所有帧统一用该比例，水獭本体视觉大小一致 */
 const PET_DISPLAY_SCALE = 96 / 101;
 
 const ANIM = {
@@ -19,21 +18,18 @@ const ANIM = {
     'assets/look-away/look.png',
     'assets/look-away/look-away2.png',
   ],
-  /** 退出视频：播一轮 */
   annoyed: [
     'assets/getting-annoyed/getting-annoyed1.png',
     'assets/getting-annoyed/getting-annoyed3.png',
     'assets/getting-annoyed/getting-annoyed2.png',
     'assets/getting-annoyed/getting-annoyed2.png',
   ],
-  /** 播放中滑动走神：播两轮 */
   question: [
     'assets/question/question1.png',
     'assets/question/question2.png',
   ],
 };
 
-/** 帧轮播间隔（与原 gif 单帧延迟一致） */
 const FRAME_MS = 500;
 const DOUBLE_CLICK_MS = 280;
 
@@ -71,7 +67,6 @@ function stopFrameLoop() {
   }
 }
 
-/** 循环帧序列（wait / watch） */
 function startFrameLoop(frames) {
   stopFrameLoop();
   frameIndex = 0;
@@ -97,7 +92,6 @@ function setWatching(watching) {
   if (!pointing && !sequencePlaying) applyBaseAnim();
 }
 
-/** 按帧序列播放 loops 轮，结束后回到基态 */
 function playSequence(frames, loops = 1) {
   if (!petSprite || !frames?.length || sequencePlaying) return;
   pointing = false;
@@ -121,7 +115,6 @@ function playSequence(frames, loops = 1) {
   }, FRAME_MS);
 }
 
-/** hover：按 look-away1 → look → look-away2 播完一轮后回到基态 */
 function playPointOnce() {
   if (!petSprite || pointing || sequencePlaying) return;
   pointing = true;
@@ -150,7 +143,6 @@ function playQuestionOnce() {
   playSequence(ANIM.question, 2);
 }
 
-/** 退出视频 / session_end：annoyed 一轮 + go-off 音效 */
 function playAnnoyedOnce() {
   playSfx('assets/noise/go-off.mp3');
   playSequence(ANIM.annoyed, 1);
@@ -207,10 +199,8 @@ function handleEvent(payload) {
       const breakType = payload.type;
 
       if (breakType === 'ui_scroll' || reason === 'scroll') {
-        // 视频播放中滑动界面：question 序列播两轮
         playQuestionOnce();
       } else if (EXIT_VIDEO_REASONS.has(reason) || breakType === 'exit_video') {
-        // 退出视频：annoyed 序列播一轮
         setWatching(false);
         playAnnoyedOnce();
       }
@@ -233,11 +223,9 @@ function handleEvent(payload) {
     case 'account_login': {
       if (payload.ok === false || payload.bindStatus === 'mismatch') {
         setWatching(false);
-        // 未登录静默；仅换号冲突提醒一次
         if (payload.bindStatus === 'mismatch') playQuestionOnce();
         break;
       }
-      // 登录 / 自动绑定成功：轻点头示意
       playPointOnce();
       break;
     }
@@ -248,7 +236,6 @@ function handleEvent(payload) {
 
     case 'account_mismatch':
       setWatching(false);
-      // logged_out 不播 distraction；换号才提醒
       if (payload.status === 'mismatch') playQuestionOnce();
       break;
 
@@ -328,10 +315,8 @@ function playSfx(src) {
   });
 }
 
-/** npm start / 宠物窗加载时播放一次进场音效 */
 playSfx('assets/noise/getting-in.mp3');
 
-/** 关闭宠物前播放一次退场音效，再通知主进程退出 */
 window.biliPet?.onClosing?.(() => {
   playSfx('assets/noise/closing.mp3').finally(() => {
     window.biliPet?.closingFinished?.();

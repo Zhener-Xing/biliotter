@@ -1,7 +1,3 @@
-/**
- * 统一事件信封：现阶段只做记录，字段预留给后续 AI。
- * 不采集评论正文、搜索词、页面 HTML。
- */
 const BiliSchema = (() => {
   const cfg = () => globalThis.BILI_PET_CONFIG || {};
 

@@ -41,7 +41,6 @@ function extractMindmapMd(raw) {
   return '';
 }
 
-/** 无 LLM 时：用切块标题拼一份粗大纲，保证一键仍有结果 */
 function outlineFromChunks(group, chunks) {
   const lines = [`# ${group.title || '课程组'}`];
   if (group.topic) lines.push(`## ${group.topic}`);
@@ -161,3 +160,4 @@ module.exports = {
   generateCourseMindmap,
   outlineFromChunks,
 };
+//AI维护的思维导图代码文件

@@ -156,3 +156,4 @@ module.exports = {
   saveAccount,
   handleAccountPayload,
 };
+//！！！！账号绑定函数，但是逻辑还存在问题

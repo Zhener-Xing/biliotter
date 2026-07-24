@@ -53,7 +53,7 @@ function startBridgeServer(onEvent) {
       resolve(server);
     });
   });
-}
+}//启动连接函数
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -62,6 +62,6 @@ function readBody(req) {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
-}
+}//读请求体格式函数
 
 module.exports = { startBridgeServer, BRIDGE_HOST, BRIDGE_PORT };

@@ -43,7 +43,6 @@ const BiliSubtitle = (() => {
         window.postMessage({ __biliPet: true, type: 'fetch_req', id, url }, '*');
       });
 
-    // 串行化，避免并发 postMessage 偶发串答
     const next = pageFetchChain.then(run, run);
     pageFetchChain = next.catch(() => {});
     return next;
@@ -102,7 +101,6 @@ const BiliSubtitle = (() => {
   }
 
   function pickPreferred(subtitles = []) {
-    // 人工中文字幕优先，AI 次之（AI 更容易错片/幻觉）
     return (
       subtitles.find((s) => /^(zh-CN|zh-Hans)$/i.test(String(s.lan || ''))) ||
       subtitles.find((s) => /zh-CN|zh-Hans/i.test(String(s.lan || '')) && !/ai-/i.test(String(s.lan || ''))) ||

@@ -8,7 +8,6 @@ const {
   updateCourseGroupItem,
 } = require('./notes-db');
 
-/** 会话内最近操作的课程组，用于理解「在里面」「该课程组」等指代 */
 let lastCourseContext = {
   groupId: null,
   groupTitle: null,
@@ -16,7 +15,6 @@ let lastCourseContext = {
   folderTitle: null,
 };
 
-/** 等待用户确认是否创建缺失的课程组/文件夹 */
 let pendingConfirm = null;
 
 function normalizeName(s) {
@@ -81,7 +79,6 @@ function looksLikeCourseAction(question) {
 
 function isAffirmative(q) {
   const s = String(q || '').trim();
-  // 只接受短确认，避免「新建一个糖类课程组」被当成「好的」
   if (s.length > 12) return false;
   return (
     /^(好的?|可以|行|是的?|对|嗯|要|创建|建|建立|新建|确认|ok|yes|y)([！!。.~～]?)$/i.test(
@@ -136,7 +133,6 @@ function stripCourseSuffix(name) {
     .trim();
 }
 
-/** 不依赖 LLM 的规则解析，覆盖常见说法 + 「在里面」指代 */
 function heuristicParseIntent(question, { recentGroupTitle } = {}) {
   const q = String(question || '').trim();
   if (!q) return null;
@@ -158,7 +154,6 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
       .replace(/[下里中]$/u, '')
       .trim();
 
-  // 新建课程组（可带文件夹）
   let m =
     q.match(/新建(?:一个)?(.+?)课程组/) ||
     q.match(/创建(?:一个)?(.+?)课程组/);
@@ -176,7 +171,6 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
     };
   }
 
-  // 在里面 / 在该课程组 创建文件夹
   m =
     q.match(/在里面(?:再)?创建(?:一个)?(.+?)文件夹/) ||
     q.match(
@@ -198,7 +192,6 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
     }
   }
 
-  // 在 XX 课程组创建 YY 文件夹
   m = q.match(/在(.+?)课程组(?:里|中)?(?:再)?创建(?:一个)?(.+?)文件夹/);
   if (m) {
     return {
@@ -212,7 +205,6 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
     };
   }
 
-  // 把笔记/视频 保存/加入 到 XX课程组 的 YY文件夹
   m =
     q.match(/(?:保存|加入|放)到(.+?)课程组(?:的|里的|下的|里|下)?(.+?)文件夹/) ||
     q.match(
@@ -230,7 +222,6 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
     };
   }
 
-  // 加入 XX 课程组（无文件夹）
   m = q.match(/(?:加入|放进|放到)(.+?)课程组(?!.*文件夹)/);
   if (m) {
     return {
@@ -319,7 +310,6 @@ async function parseCourseActionIntent(question, { bvid, title, history } = {}) 
     source: 'llm',
   };
 
-  // 「在里面」但 LLM 没填 groupTitle 时，用上下文补上
   if (
     (!llmIntent.groupTitle || /里面|其中|该课程组|这个课程组/.test(question)) &&
     recentGroupTitle &&
@@ -330,7 +320,6 @@ async function parseCourseActionIntent(question, { bvid, title, history } = {}) 
     llmIntent.confidence = Math.max(llmIntent.confidence, 0.8);
   }
 
-  // LLM 失败或置信低时，优先用规则
   if (llmIntent.action === 'none' || llmIntent.confidence < 0.55) {
     if (heuristic && heuristic.confidence >= 0.7) return heuristic;
   }
@@ -435,7 +424,6 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
       (videoTitle ? `${videoTitle.slice(0, 24)}` : '未命名课程组');
     if (!/课程组$/.test(groupTitle)) groupTitle += '课程组';
 
-    // 同名已存在则直接加入
     const existing = findBestByTitle(listCourseGroups(), groupTitle, (g) => g.title);
     if (existing && existing.score >= 80) {
       const next = {
@@ -511,7 +499,7 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
       handled: true,
       ok: false,
       message:
-        '我还不确定要操作哪个课程组。可以说名字，例如「加入糖类课程组」，或先说「新建糖类课程组」。',
+        '我还不确定要操作哪个课程组。可以说名字，例如「加入线性代数课程组」，或先说「新建线性代数课程组」。',
     };
   }
 
@@ -627,7 +615,6 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
 
 function handlePendingConfirm(question, videoMeta) {
   if (!pendingConfirm) return null;
-  // 超时 5 分钟作废
   if (Date.now() - (pendingConfirm.askedAt || 0) > 5 * 60 * 1000) {
     clearPending();
     return null;
@@ -652,7 +639,6 @@ function handlePendingConfirm(question, videoMeta) {
     return executeCourseAction(intent, meta, { forceCreate: true });
   }
 
-  // 用户说了新的课程指令：取消旧确认，交给后面重新解析
   if (looksLikeCourseAction(question) && !isAffirmative(question) && !isNegative(question)) {
     clearPending();
     return null;
@@ -670,7 +656,6 @@ async function tryHandleCourseChat(question, videoMeta = {}, opts = {}) {
   const q = String(question || '').trim();
   if (!q) return { handled: false };
 
-  // 先处理「好的 / 不用」确认流
   if (pendingConfirm) {
     const pendingResult = handlePendingConfirm(q, videoMeta);
     if (pendingResult) return pendingResult;
@@ -688,7 +673,6 @@ async function tryHandleCourseChat(question, videoMeta = {}, opts = {}) {
     });
   } catch (err) {
     console.warn('[bili-pet] course parse failed:', err.message || err);
-    // 绝不把底层 LLM 报错甩给用户
     const fallback = heuristicParseIntent(q, {
       recentGroupTitle: extractRecentGroupFromHistory(opts.history),
     });
@@ -704,7 +688,6 @@ async function tryHandleCourseChat(question, videoMeta = {}, opts = {}) {
   }
 
   if (!intent || intent.action === 'none' || intent.confidence < 0.55) {
-    // 像课程指令但解析失败：友好提示，而不是静默丢给闲聊
     if (/课程组|文件夹|放进|放到|新建|创建/.test(q)) {
       return {
         handled: true,
@@ -743,3 +726,4 @@ module.exports = {
   getLastCourseContext,
   resetCourseActionState,
 };
+//AI维护的课程组代码文件，比较懒得维护，如果能看得懂就维护吧，逻辑和之前的笔记检索是相同的

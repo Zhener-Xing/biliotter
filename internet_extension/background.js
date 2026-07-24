@@ -1,7 +1,3 @@
-/**
- * 会话 / 字幕 / 专注中断落盘；实时推送桌面宠物，失败入队重试。
- */
-
 const cfg = {
   SCHEMA_VERSION: 1,
   SOURCE: 'bili-pet-bridge',
@@ -73,10 +69,6 @@ function normalizeCookieUid(value) {
   return uid;
 }
 
-/**
- * 从多个域名 / getAll 读取 DedeUserID。
- * 单点 chrome.cookies.get(www) 在部分 Cookie Domain 形态下会漏读。
- */
 async function getBiliAccountFromCookies() {
   try {
     const fromList = await chrome.cookies.getAll({ name: 'DedeUserID' });
@@ -100,7 +92,6 @@ async function getBiliAccountFromCookies() {
         const uid = normalizeCookieUid(c?.value);
         if (uid) return { uid, loggedIn: true, source: `cookie-get:${url}` };
       } catch (_) {
-        /* 无该 host 权限时忽略 */
       }
     }
 
@@ -111,7 +102,6 @@ async function getBiliAccountFromCookies() {
   }
 }
 
-/** 在已打开的 B 站标签里执行探测（可读页面 Cookie，或带登录态请求 nav） */
 async function probeUidFromBiliTabs() {
   if (!chrome.scripting?.executeScript) return null;
   let tabs = [];
@@ -124,7 +114,6 @@ async function probeUidFromBiliTabs() {
     return null;
   }
 
-  // 当前窗口活动标签优先
   tabs.sort((a, b) => Number(b.active) - Number(a.active));
 
   for (const tab of tabs) {
@@ -162,7 +151,6 @@ async function probeUidFromBiliTabs() {
         return { uid, loggedIn: true, source: `tab-${result?.via || 'probe'}` };
       }
     } catch (err) {
-      // 受限页 / 无权限注入
       console.warn('[bili-pet] tab probe failed', tab.id, err?.message || err);
     }
   }
@@ -186,7 +174,6 @@ async function getBiliAccount() {
   try {
     const { biliAccountCache } = await chrome.storage.local.get('biliAccountCache');
     const cachedUid = normalizeCookieUid(biliAccountCache?.uid);
-    // 缓存仅作短时兜底（10 分钟），避免永久错绑
     if (
       cachedUid &&
       Number(biliAccountCache?.at) &&
@@ -201,8 +188,7 @@ async function getBiliAccount() {
 
 async function attachAccount(payload) {
   const existingUid = normalizeCookieUid(payload?.account?.uid);
-  // 已有有效 uid 才跳过；uid:null 的旧信封必须重新读 Cookie
-  if (existingUid) {
+    if (existingUid) {
     return {
       ...payload,
       account: {
@@ -267,16 +253,11 @@ async function pushAccountEvent(kind, account) {
 }
 
 /**
- * 根据 Cookie 同步桌面宠登录态。
- * - 首次看到 UID → account_hello / account_login（自动登录）
- * - UID 消失 → account_logout
- * - 换号 → account_login（新 UID；桌面端硬绑定会拒绝）
  * @param {{ force?: boolean, hintUid?: string | null }} [opts]
  */
 async function syncAccountFromCookies(opts = {}) {
   const force = Boolean(opts.force);
   let account = await getBiliAccount();
-  // 页面侧提示的 uid（Cookie API 偶发漏读时兜底）
   const hintUid = normalizeCookieUid(opts.hintUid);
   if (!account.uid && hintUid) {
     account = { uid: hintUid, loggedIn: true, source: 'page-hint' };
@@ -295,19 +276,16 @@ async function syncAccountFromCookies(opts = {}) {
     return { ok: true, account };
   }
 
-  // 强制同步失败时不要误推 logout（否则会把已登录用户打成未登录）
-  if (force) {
+    if (force) {
     return { ok: false, account: { uid: null, loggedIn: false, source: account.source || 'none' } };
   }
 
-  // 未登录：启动同步或从已登录变为退出
   if (prev === undefined || prev) {
     await pushAccountEvent('account_logout', { uid: null, loggedIn: false });
   }
   return { ok: false, account: { uid: null, loggedIn: false, source: account.source || 'none' } };
 }
 
-/** 页面 / popup 上报的 uid 提示（不信任伪造为最终态，仍会与 Cookie 交叉验证） */
 async function ingestPageAccountHint(hintUid) {
   const uid = normalizeCookieUid(hintUid);
   if (!uid) return;
@@ -330,7 +308,6 @@ async function flushQueue(settings) {
     const ok = await bridgeToPet(item, settings);
     if (!ok) {
       remain.push(item);
-      // 后面大概率也失败，先停下
       remain.push(...state.pushQueue.slice(state.pushQueue.indexOf(item) + 1));
       break;
     }
@@ -361,7 +338,6 @@ async function recordFocusBreak(payload) {
 
 async function pushSubtitleRecord(record) {
   const state = await readState();
-  // 同一会话只保留一条「长字符串」记录，持续覆盖更新
   const subtitleLog = [...state.subtitleLog];
   const idx = subtitleLog.findIndex((item) => item.sessionId === record.sessionId);
   const entry = {
@@ -400,7 +376,6 @@ async function handlePayload(payload, senderTab = null) {
     return;
   }
 
-  // 多标签串台：进度/字幕只接受「当前窗口正在看的标签」
   const liveKinds = new Set(['progress', 'heartbeat', 'session_meta', 'session_start']);
   if (liveKinds.has(payload.kind) && senderTab?.id != null) {
     try {
@@ -409,13 +384,11 @@ async function handlePayload(payload, senderTab = null) {
         return;
       }
     } catch (_) {
-      // 无 tabs 权限时跳过该保护
     }
   }
 
   const existing = await readState();
   const cur = existing.current;
-  // 旧会话迟到的 progress/heartbeat 不得覆盖当前片
   if (
     (payload.kind === 'progress' || payload.kind === 'heartbeat' || payload.kind === 'session_meta') &&
     payload.sessionId &&
@@ -610,8 +583,7 @@ async function fetchJsonWithBrowserSession(url) {
     Referer: 'https://www.bilibili.com',
     Origin: 'https://www.bilibili.com',
   };
-  // 扩展可显式附带 Cookie，绕过 SW 跨站丢失 SameSite 的问题
-  if (cookie) headers.Cookie = cookie;
+    if (cookie) headers.Cookie = cookie;
 
   const res = await fetch(url, {
     method: 'GET',
@@ -758,5 +730,5 @@ chrome.runtime.onStartup?.addListener?.(() => {
   void syncAccountFromCookies();
 });
 
-// Service worker 冷启动：立刻把当前 B 站登录态同步给桌面宠
 void syncAccountFromCookies();
+//明天更改的账号绑定逻辑，数据这块儿做的跟屎一样

@@ -22,7 +22,6 @@ contextBridge.exposeInMainWorld('biliPet', {
   goHome(opts) {
     return ipcRenderer.invoke('pet:goHome', opts || {});
   },
-  /** 主进程通知知识库打开指定笔记 */
   onOpenHomeNote(callback) {
     if (typeof callback !== 'function') return () => {};
     const handler = (_event, payload) => callback(payload);
@@ -64,3 +63,4 @@ contextBridge.exposeInMainWorld('biliPet', {
     return ipcRenderer.invoke('pet:notesAssetDataUrl', { src });
   },
 });
+//桥接层，属于electron主程序的链接部分，由AI维护，由于我对electron一知半解建议后面再搞
