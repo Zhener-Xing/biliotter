@@ -30,7 +30,7 @@ function normalizeNotes(notes) {
   const has =
     next.title || next.cues.length || next.notes.length || next.summary;
   return has ? next : null;
-}//标准化笔记hua wei zi f
+}//标准化笔记
 
 function cornellToMarkdown(notes) {
   const n = normalizeNotes(notes);
@@ -51,7 +51,7 @@ function cornellToMarkdown(notes) {
     lines.push('## 总结', '', n.summary, '');
   }
   return lines.join('\n').trim() + '\n';
-}
+}//建立康奈尔结构
 
 function ensureColumn(database, table, column, typeSql) {
   const cols = database.prepare(`PRAGMA table_info(${table})`).all();
@@ -87,7 +87,7 @@ function getDb() {
   backfillBodyMd(db);
   backfillAllChunksIfEmpty(db);
   return db;
-}
+}//切块
 
 function ensureStudyActivityTables(database) {
   database.exec(`
@@ -101,14 +101,13 @@ function ensureStudyActivityTables(database) {
   `);
 }
 
-/** 本地日历日 YYYY-MM-DD */
 function dayKeyFromTs(ts = Date.now()) {
   const d = new Date(Number(ts) || Date.now());
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
+}//日期函数
 
 function ensureStudyDayRow(database, day, now = Date.now()) {
   database
@@ -134,7 +133,7 @@ function addStudyMs(ms, at = Date.now()) {
     )
     .run(amount, now, day);
   return getStudyDay(day);
-}
+}//获取学习日期函数
 
 function addSwitchCount(n = 1, at = Date.now()) {
   const amount = Math.max(0, Math.floor(Number(n) || 0));
@@ -168,7 +167,7 @@ function addDistractCount(n = 1, at = Date.now()) {
     )
     .run(amount, now, day);
   return getStudyDay(day);
-}
+}//增加分心函数，可以写到另一个文件去
 
 function getStudyDay(day) {
   const key = String(day || dayKeyFromTs());
@@ -199,10 +198,7 @@ function getStudyDay(day) {
   };
 }
 
-/**
- * 拉取连续日历日活跃度（含无数据的空天），默认约一年。
- * @param {{ days?: number, endDay?: string }} [opts]
- */
+
 function listStudyActivity(opts = {}) {
   const days = Math.min(400, Math.max(7, Math.floor(Number(opts.days) || 371)));
   const endKey = opts.endDay ? String(opts.endDay) : dayKeyFromTs();
@@ -294,7 +290,7 @@ function ensureCourseGroupTables(database) {
     CREATE INDEX IF NOT EXISTS idx_course_group_items_bvid
       ON course_group_items(bvid);
   `);
-  // 旧库可能没有 folder_id：先补列，再建索引
+  //SQLite逻辑
   ensureColumn(database, 'course_group_items', 'folder_id', 'TEXT');
   ensureColumn(database, 'course_groups', 'mindmap_md', "TEXT NOT NULL DEFAULT ''");
   database.exec(`
@@ -311,7 +307,6 @@ function makeCourseFolderId() {
   return `cf_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** 从 BV 号或 bilibili 视频 URL 中解析 bvid */
 function normalizeBvid(input) {
   const raw = String(input || '').trim();
   if (!raw) return '';
@@ -319,7 +314,7 @@ function normalizeBvid(input) {
   if (fromUrl) return fromUrl[0];
   if (/^BV[\w]+$/i.test(raw)) return raw;
   return '';
-}
+}//解析BVID
 
 function parseMetaJson(raw) {
   try {
@@ -328,7 +323,7 @@ function parseMetaJson(raw) {
   } catch {
     return {};
   }
-}
+}//解析JSON格式
 
 function touchCourseGroup(database, groupId, now = Date.now()) {
   database
@@ -358,7 +353,7 @@ function listFoldersForGroup(database, groupId) {
     createdAt: Number(r.created_at) || 0,
     updatedAt: Number(r.updated_at) || 0,
   }));
-}
+}//课程组管理
 
 function resolveFolderId(database, groupId, folderId) {
   if (folderId == null || folderId === '' || folderId === 'root') return null;
@@ -387,7 +382,7 @@ function rowToCourseGroup(row, { items = [], folders = [] } = {}) {
     folders,
     items,
   };
-}
+}//文件夹管理逻辑
 
 function listItemsForGroup(database, groupId) {
   const rows = database
@@ -585,7 +580,7 @@ function deleteCourseGroup(id) {
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
-}
+}//以上是基础课程组管理函数，都比较浅显按需取用
 
 function getCourseMindmap(groupId) {
   const key = String(groupId || '').trim();
@@ -602,7 +597,7 @@ function getCourseMindmap(groupId) {
     itemCount: group.itemCount,
     bvids: (group.items || []).map((i) => i.bvid),
   };
-}
+}//获取思维导图函数
 
 function saveCourseMindmap(groupId, mindmapMd) {
   const key = String(groupId || '').trim();
@@ -628,7 +623,7 @@ function saveCourseMindmap(groupId, mindmapMd) {
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
-}
+}//保存思维导图函数
 
 function createCourseFolder(groupId, { title = '', ord = null } = {}) {
   const gid = String(groupId || '').trim();
@@ -670,7 +665,7 @@ function createCourseFolder(groupId, { title = '', ord = null } = {}) {
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
-}
+}//建立文件夹函数，按理来说不应该在这个位置，但是算了吧
 
 function updateCourseFolder(groupId, folderId, patch = {}) {
   const gid = String(groupId || '').trim();
@@ -710,7 +705,7 @@ function updateCourseFolder(groupId, folderId, patch = {}) {
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
-}
+}//依旧SQLite命令来的
 
 function deleteCourseFolder(groupId, folderId) {
   const gid = String(groupId || '').trim();
@@ -729,7 +724,6 @@ function deleteCourseFolder(groupId, folderId) {
 
     const now = Date.now();
     withTransaction(database, () => {
-      // 文件夹删掉后，里面的视频回到课程组根目录
       database
         .prepare(
           `
@@ -943,7 +937,6 @@ function withTransaction(database, fn) {
     try {
       database.exec('ROLLBACK');
     } catch {
-      /* ignore */
     }
     throw err;
   }
@@ -976,7 +969,7 @@ function splitLongText(text, heading, maxChars, overlap) {
     start = Math.max(end - overlap, start + 1);
   }
   return out;
-}
+}//真正的切块逻辑在这里！！！！！！！！
 
 function chunkMarkdown(bodyMd, { title = '' } = {}) {
   const md = String(bodyMd || '').replace(/\r\n/g, '\n').trim();
@@ -1021,7 +1014,7 @@ function chunkMarkdown(bodyMd, { title = '' } = {}) {
     heading: c.heading || '',
     text: c.text,
   }));
-}//切块
+}//切块MD的逻辑
 
 function reindexNoteChunks(bvid, bodyMd, meta = {}) {
   const key = String(bvid || '').trim();
@@ -1055,7 +1048,6 @@ function reindexNoteChunks(bvid, bodyMd, meta = {}) {
   return { ok: true, count: chunks.length, bvid: key };
 }
 
-/** 首次建表后若 chunks 为空，把已有笔记全部切一遍；之后补齐缺 chunk 的笔记 */
 function backfillAllChunksIfEmpty(database) {
   try {
     const n = database.prepare('SELECT COUNT(*) AS c FROM note_chunks').get();
@@ -1077,7 +1069,6 @@ function backfillAllChunksIfEmpty(database) {
       return;
     }
 
-    // 部分笔记有正文但从未建 chunk（早期版本/半迁移）
     const missing = database
       .prepare(
         `
@@ -1102,7 +1093,7 @@ function backfillAllChunksIfEmpty(database) {
   } catch (err) {
     console.warn('[bili-pet] chunk backfill skipped:', err.message || err);
   }
-}
+}//鲁棒性函数，AI维护的
 
 const SEARCH_STOPWORDS = new Set([
   '这个',
@@ -1132,9 +1123,8 @@ const SEARCH_STOPWORDS = new Set([
   '告诉',
   '帮我',
   '看看',
-]);
+]);//其实我觉得不需要加，这是AI逻辑出来的
 
-/** 从中文问句抽出可用于 FTS/LIKE 的词，避免整句 AND 匹配失败 */
 function extractSearchTerms(query) {
   const q = String(query || '').trim();
   if (!q) return [];
@@ -1156,7 +1146,6 @@ function extractSearchTerms(query) {
 
   const zh = q.replace(/[^\u4e00-\u9fff]/g, '');
   if (zh.length >= 2) {
-    // 优先较长片段：去掉常见疑问尾巴后再切 2~4 字
     const cleaned = zh
       .replace(/(是什么|讲什么|讲了什么|有多少|有几篇|怎么样|如何|什么意思)$/g, '')
       .replace(/^(这个|那个|我的|最近|请问)/g, '');
@@ -1174,7 +1163,7 @@ function extractSearchTerms(query) {
     push(Array.from(q).slice(0, 8).join(''));
   }
   return terms.slice(0, 8);
-}
+}//中文逻辑字段处理
 
 function normalizeBvidFilter({ bvid = null, bvids = null } = {}) {
   const out = [];
@@ -1190,7 +1179,7 @@ function normalizeBvidFilter({ bvid = null, bvids = null } = {}) {
   }
   if (bvid) push(bvid);
   return out;
-}
+}//自然语言拆成FTS匹配字节块
 
 function searchByLike(database, terms, { bvidKey = null, bvidKeys = null, limit = 5 } = {}) {
   const lim = Math.max(1, Math.min(40, Number(limit) || 5));
@@ -1252,7 +1241,7 @@ function searchByLike(database, terms, { bvidKey = null, bvidKeys = null, limit 
     }
   }
   return results;
-}
+}//依旧数据库检索逻辑
 
 function searchNoteChunks(query, { bvid = null, bvids = null, limit = 5 } = {}) {
   const q = String(query || '').trim();
@@ -1278,7 +1267,6 @@ function searchNoteChunks(query, { bvid = null, bvids = null, limit = 5 } = {}) 
     }
   }
 
-  // FTS：用关键词 OR，避免整句 trigram AND 导致 0 命中
   const ftsTerms = (terms.length ? terms : [q])
     .map((t) => t.replace(/["*^\-{}():]/g, ' ').replace(/\s+/g, ' ').trim())
     .filter((t) => t.length >= 2)
@@ -1337,7 +1325,6 @@ function searchNoteChunks(query, { bvid = null, bvids = null, limit = 5 } = {}) 
 
   if (rows.length) return rows;
 
-  // FTS 空结果 → LIKE 回退
   try {
     return searchByLike(database, terms.length ? terms : [q.slice(0, 12)], {
       bvidKey,
@@ -1348,9 +1335,8 @@ function searchNoteChunks(query, { bvid = null, bvids = null, limit = 5 } = {}) 
     console.warn('[bili-pet] searchNoteChunks LIKE fallback failed:', err.message || err);
     return [];
   }
-}
+}//AI维护的命中逻辑函数，先用着，用不好再说
 
-/** 按课程组内多个 BV 顺序取样切块（无关键词时的兜底） */
 function listChunksForBvids(bvids, { limit = 40, perBvid = 6 } = {}) {
   const keys = normalizeBvidFilter({ bvids });
   if (!keys.length) return [];
@@ -1506,7 +1492,7 @@ function loadNoteDoc(bvid) {
   } catch {
     return null;
   }
-}
+}//加载函数，没啥用，放着就行
 
 function saveNoteDoc(bvid, patch = {}) {
   const key = String(bvid || '').trim();
@@ -1562,7 +1548,7 @@ function saveNoteDoc(bvid, patch = {}) {
   reindexNoteChunks(key, bodyMd, { title });
 
   return loadNoteDoc(key);
-}
+}//数据更新逻辑
 
 function safeAssetKey(bvid) {
   const key = String(bvid || '').trim();
@@ -1602,9 +1588,7 @@ function listNoteDocs() {
   }
 }
 
-/**
- * 搜索笔记：标题/bvid/正文命中列表 + 分块检索片段。
- */
+
 function searchNotes(query, { limit = 20 } = {}) {
   const q = String(query || '').trim();
   if (!q) {
@@ -1658,7 +1642,6 @@ function deleteNoteDoc(bvid) {
       try {
         fs.rmSync(dir, { recursive: true, force: true });
       } catch {
-        /* ignore asset cleanup errors */
       }
     }
     return { ok: true, deleted: info.changes > 0, bvid: key };
@@ -1689,7 +1672,7 @@ function saveNoteAsset(bvid, { bytes, ext = 'png', mime = 'image/png' } = {}) {
     path: resolved,
     url,
     mime,
-    markdown: `![截图](${url})`,
+    markdown: `![图片](${url})`,
   };
 }
 
@@ -1698,7 +1681,6 @@ function closeNotesDb() {
   try {
     db.close();
   } catch {
-    /* ignore */
   }
   db = null;
 }
@@ -1740,3 +1722,4 @@ module.exports = {
   getStudyDay,
   listStudyActivity,
 };
+//主要是数据库逻辑，有一部分AI维护优先让AI读逻辑，我都标注出来了

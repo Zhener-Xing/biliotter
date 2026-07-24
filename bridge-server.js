@@ -1,7 +1,7 @@
 const http = require('http');
 
 const BRIDGE_HOST = '127.0.0.1';
-const BRIDGE_PORT = 39261;
+const BRIDGE_PORT = 39261;//直接放在本地了
 
 function startBridgeServer(onEvent) {
   const server = http.createServer(async (req, res) => {

@@ -3,13 +3,6 @@ const path = require('path');
 
 const ACCOUNT_FILE = path.join(__dirname, '.bili-pet-account.json');
 
-/** @type {null | {
- *   boundUid: string | null,
- *   boundAt: number | null,
- *   lastSeenUid: string | null,
- *   lastSeenAt: number | null,
- *   sessionLoggedIn: boolean,
- * }} */
 let cache = null;
 
 function normalizeUid(uid) {
@@ -67,7 +60,6 @@ function extractUid(payload) {
 }
 
 /**
- * 校验 / 自动绑定桥接事件中的 B 站 UID。
  * @returns {{
  *   ok: boolean,
  *   status: string,
@@ -125,7 +117,6 @@ function handleAccountPayload(payload) {
     return { ok: true, status: 'logged_in', uid, account: loadAccount() };
   }
 
-  // 普通学习事件：未登录 / 非主人 → 拒绝
   if (!uid) {
     return { ok: false, status: 'logged_out', uid: null, account };
   }

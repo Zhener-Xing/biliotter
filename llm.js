@@ -44,7 +44,6 @@ async function chatCompletion({
       max_tokens,
       messages,
     };
-    // 一键整理强制 JSON，降低「返回不是 JSON 对象」概率（兼容 OpenAI / DeepSeek）
     if (jsonMode) {
       body.response_format = { type: 'json_object' };
     }
@@ -62,7 +61,6 @@ async function chatCompletion({
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const detail = data?.error?.message || data?.message || res.statusText;
-      // 部分代理不支持 response_format：自动降级重试一次
       if (jsonMode && res.status === 400 && /response_format|json_object/i.test(String(detail))) {
         clearTimeout(timer);
         return chatCompletion({
@@ -84,7 +82,7 @@ async function chatCompletion({
     if (err?.name === 'AbortError') {
       throw new Error(`LLM 请求超时（>${waitMs}ms）`);
     }
-    // 已是我们包装过的 Error 直接抛
+    
     if (err instanceof Error && /^LLM HTTP |无法连接 LLM|缺少 LLM_API_KEY|LLM 返回空|LLM 请求超时/.test(err.message)) {
       throw err;
     }
@@ -95,7 +93,7 @@ async function chatCompletion({
       .join(' | ');
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT') {
       throw new Error(
-        `无法连接 LLM 接口（${detail}）。请检查 .env 里 LLM_API_BASE 是否可访问（国内常需 DeepSeek/通义等兼容地址，不能直连 api.openai.com）`
+        `无法连接 LLM 接口（${detail}）。请检查 .env 里 LLM_API_BASE 是否可访问`
       );
     }
     throw new Error(detail || String(err));
@@ -130,7 +128,6 @@ function tryParseJson(slice) {
   }
 }
 
-/** 截断时尝试补全常见的 JSON 尾巴（title + body_md） */
 function repairTruncatedNotesJson(slice) {
   let s = String(slice || '').trim();
   if (!s.startsWith('{')) return null;
@@ -138,7 +135,6 @@ function repairTruncatedNotesJson(slice) {
   const repaired = tryParseJson(s);
   if (repaired) return repaired;
 
-  // 去掉末尾半截转义/引号，再补齐
   s = s.replace(/\\+$/, '');
   if ((s.match(/"/g) || []).length % 2 === 1) s += '"';
   for (const tail of ['"}', '"\n}', '\n}', '}']) {
@@ -185,7 +181,6 @@ function normalizeMdBlock(text) {
   return s ? `${s}\n` : '';
 }
 
-/** 拆出用户手写部分与上次 AI 补充（用户部分程序侧永不改写） */
 function splitOrganizeBody(bodyMd) {
   const raw = String(bodyMd || '');
   const re =
@@ -218,7 +213,6 @@ function mergeOrganizeBody(userBodyMd, aiMd) {
 function parseCollabJson(raw, userBodyMd = '') {
   const data = extractJsonObject(raw);
   const aiMd = String(data.ai_md || data.aiMd || data.additions_md || data.additionsMd || '').trim();
-  // 兼容旧模型仍返回 body_md：当作 AI 补充，绝不用它覆盖用户原文
   let legacyBody = String(data.body_md || data.bodyMd || '').trim();
   if (!aiMd && legacyBody) {
     const user = String(userBodyMd || '').trim();
@@ -242,10 +236,6 @@ function parseCollabJson(raw, userBodyMd = '') {
 
 const MAX_ORGANIZE_TRANSCRIPT_CHARS = 12000;
 
-/**
- * 一键整理用「片头 → 当前进度」已看字幕，不是上次整理之后的增量尾部。
- * 优先 fullSubtitleText 按进度截取；否则用累计 transcriptText。超长时保留前段（基础内容），避免只剩间隔尾部。
- */
 function pickTranscriptText(payload = {}) {
   const full = String(payload.fullSubtitleText || '').trim();
   const live = String(payload.transcriptText || '').trim();
@@ -260,7 +250,6 @@ function pickTranscriptText(payload = {}) {
       const cut = Math.max(200, Math.ceil(full.length * ratio * 1.15));
       text = full.slice(0, cut);
     } else if (live && live.length >= Math.min(full.length, 200)) {
-      // 无可靠进度时，累计跟播通常更贴近「已看」
       text = live;
     }
   } else {
@@ -376,12 +365,12 @@ function createNotesOrganizer(hooks = {}) {
       ev.currentSubtitle?.content ||
       '';
     if (!userBodyMd.trim() && !previousAiMd.trim() && !transcript && !context) {
-      hooks.onStatus?.('没有可整理的内容（写点笔记或等字幕）');
+      hooks.onStatus?.('没有可整理的内容');
       return { ok: false, error: 'empty' };
     }
 
     inflight = true;
-    hooks.onStatus?.('正在一键整理（保留你的原文，仅增补 AI 区块）…');
+    hooks.onStatus?.('正在一键整理…');
     try {
       const raw = await completeTask(
         'notes_collab',
@@ -424,13 +413,12 @@ function createNotesOrganizer(hooks = {}) {
 
   async function maybeHandle(payload) {
     if (!payload?.kind) return;
-    // 仅绑定会话；正文加载交给渲染进程 notesLoad，避免换片时抢写编辑器
     if (payload.kind === 'session_start') {
       resetForSession(payload);
       hooks.onStatus?.(
         currentBvid
-          ? '已切换视频：可继续手写，需要时点「一键整理」'
-          : '开始手写笔记；需要时点「一键整理」'
+          ? '已切换视频'
+          : '开始手写笔记'
       );
     }
   }
@@ -448,3 +436,5 @@ module.exports = {
   chatCompletion,
   completeTask,
 };
+//llm 接口代码文件，切块逻辑和喂给大模型的东西都在这里，然而这是AI维护的部分。对我来说快黑箱了
+//改成向量逻辑还是要动这一块儿

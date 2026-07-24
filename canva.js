@@ -38,7 +38,7 @@ loadEnv(path.join(__dirname, '.env'));
 
 protocol.registerSchemesAsPrivileged([
   {
-    scheme: 'bilinotes',
+    scheme: 'bilinotes',//自定义协议地址，所有保存的截图都在本地寻找
     privileges: {
       standard: true,
       secure: true,
@@ -48,7 +48,7 @@ protocol.registerSchemesAsPrivileged([
       corsEnabled: true,
     },
   },
-]);
+]);//加载.env文件
 
 function mimeFromExt(ext) {
   const e = String(ext || '').toLowerCase();
@@ -57,11 +57,10 @@ function mimeFromExt(ext) {
   if (e === 'webp') return 'image/webp';
   if (e === 'svg') return 'image/svg+xml';
   return 'image/png';
-}
+}//根据文件扩展名返回对应图片文件
 
 function resolveBilinotesUrl(requestUrl) {
   const u = new URL(requestUrl);
-  // bilinotes://asset/<bvid>/<file>
   const parts = u.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
   if (u.hostname !== 'asset' || parts.length < 2) return null;
   const rel = parts.map((p) => decodeURIComponent(p)).join(path.sep);
@@ -70,7 +69,7 @@ function resolveBilinotesUrl(requestUrl) {
   if (full !== path.normalize(ASSETS_DIR) && !full.startsWith(root)) return null;
   if (!fs.existsSync(full)) return null;
   return full;
-}
+}//拼接url，把协议地址转化为真实地址
 const PID_FILE = path.join(__dirname, '.bili-pet.pid');
 
 const PET_WINDOW = { width: 160, height: 180 };
@@ -84,13 +83,11 @@ let homeWindow = null;
 let bridgeServer;
 let homeServer;
 let latestEvent = null;
-/** 本片最完整的跟播快照（供一键整理用，不因 heartbeat 变瘦） */
 let noteContext = null;
 let notesOrganizer = null;
 
 const MAX_NOTE_ASSET_BYTES = 8 * 1024 * 1024;
 
-/** ⌘D / ⌘O 近同时按下 → 结束学习；⌘C / ⌘O → 打开聊天 */
 let lastChordD = 0;
 let lastChordC = 0;
 let lastChordO = 0;
@@ -106,7 +103,7 @@ if (!gotTheLock) {
       mainWindow.focus();
     }
   });
-}
+}//electron一次一个进程
 
 function writePidFile() {
   try {
@@ -114,17 +111,15 @@ function writePidFile() {
   } catch (err) {
     console.error('[bili-pet] failed to write pid file:', err.message || err);
   }
-}
+}//写入PID，记录宠物运行状态
 
 function clearPidFile() {
   try {
     if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
   } catch {
-    // ignore
   }
-}
+}//清除PID
 
-/** 关闭前先让宠物窗播 closing.mp3，播完再真正退出 */
 let allowQuit = false;
 let closingSoundPending = false;
 
@@ -155,11 +150,11 @@ function quitAfterClosingSound() {
     finish();
   });
   mainWindow.webContents.send('pet:closing');
-}
+}//在播放完音频后终止进程函数
 
 function endStudy() {
   quitAfterClosingSound();
-}
+}//调用结束函数，没啥用但是接口在这里，修改的时候不要动
 
 function homePageBounds() {
   const anchor =
@@ -175,9 +170,8 @@ function homePageBounds() {
     x: Math.round(workArea.x + (workArea.width - width) / 2),
     y: Math.round(workArea.y + (workArea.height - height) / 2),
   };
-}
+}//建立画布
 
-/** 主页弹窗：知识库；可选打开指定笔记；宠物保持显示；仅 ⌘D+O 结束进程 */
 async function goHome(opts = {}) {
   const raw =
     opts && typeof opts === 'object'
@@ -230,7 +224,7 @@ async function goHome(opts = {}) {
   });
 
   return { ok: true, opened: true, bvid: bvid || null };
-}
+}//返回主页，现在是调用知识库函数，是接口，不要随便修改
 
 function registerStopChord() {
   const okD = globalShortcut.register('CommandOrControl+D', () => {
@@ -245,10 +239,9 @@ function registerStopChord() {
   if (!okD || !okO) {
     console.warn('[bili-pet] failed to register ⌘D+O stop chord');
   }
-}
+}//注册结束快捷键，撂在这里就行
 
 function registerChatShortcut() {
-  // ⌘C + ⌘O 短时间先后 → 打开聊天（单独 ⌘C 不再抢复制）
   const ok = globalShortcut.register('CommandOrControl+C', () => {
     lastChordC = Date.now();
     if (lastChordC - lastChordO <= CHORD_MS) openChatWindow();
@@ -256,7 +249,7 @@ function registerChatShortcut() {
   if (!ok) {
     console.warn('[bili-pet] failed to register ⌘C+O chat chord');
   }
-}
+}//注册打开对话快捷键
 
 function notesPageBounds() {
   const anchor =
@@ -272,7 +265,7 @@ function notesPageBounds() {
     x: Math.round(workArea.x + (workArea.width - width) / 2),
     y: Math.round(workArea.y + (workArea.height - height) / 2),
   };
-}
+}//笔记本页面设置，是一个我觉得相对合理的尺寸
 
 function chatPageBounds() {
   const anchor =
@@ -291,7 +284,7 @@ function chatPageBounds() {
     y = Math.max(workArea.y + 16, Math.min(pet.y, workArea.y + workArea.height - height - 16));
   }
   return { width, height, x, y };
-}
+}//对话框页面设置
 
 function eventBvid(ev) {
   return ev?.bvid || ev?.modelInput?.video?.bvid || null;
@@ -309,11 +302,11 @@ function currentVideoMeta() {
     noteContext?.title ||
     noteContext?.modelInput?.video?.title ||
     '';
-  return {
+  return{
     bvid: bvid || null,
     title: String(title || '').trim(),
   };
-}
+}//自取上述各种取数函数
 
 function updateNoteContext(payload) {
   if (!payload?.kind) return;
@@ -332,7 +325,6 @@ function updateNoteContext(payload) {
   ).trim();
   const switchedBvid = Boolean(bvid && prevBvid && bvid !== prevBvid);
 
-  // 换片才整表重置；同片二次 session_start（未播完重启）保留字幕快照，否则一键整理会丢上下文
   if (switchedBvid) {
     noteContext = { ...payload };
     return;
@@ -374,7 +366,6 @@ function updateNoteContext(payload) {
       const prev = String(noteContext.transcriptText || '');
       if (!next) return prev;
       if (!prev) return next;
-      // 同片二次启动瞬间可能先推很短的 transcript，勿覆盖已有长串
       return next.length >= prev.length ? next : prev;
     })(),
     fullSubtitleText: fullSubtitle
@@ -389,12 +380,11 @@ function updateNoteContext(payload) {
     modelInput: payload.modelInput || noteContext.modelInput,
     currentSubtitle: payload.currentSubtitle || noteContext.currentSubtitle,
   };
-}
+}//笔记更新逻辑函数，不是接口
 
 function broadcastPetEvent(payload, opts = {}) {
   const touchLatest = opts.touchLatest !== false;
   const kind = String(payload?.kind || '');
-  // 笔记/LLM 旁路事件不得覆盖跟播 latestEvent，否则整理会丢字幕上下文
   const isSideChannel =
     kind.startsWith('notes_') || kind === 'llm_reply';
   if (touchLatest && !isSideChannel) {
@@ -406,7 +396,7 @@ function broadcastPetEvent(payload, opts = {}) {
       win.webContents.send('pet:event', payload);
     }
   }
-}
+}//？谁都不知道啥时候修的函数
 
 function openNotesWindow() {
   if (notesWindow && !notesWindow.isDestroyed()) {
@@ -452,13 +442,13 @@ function openNotesWindow() {
         notes: doc.notes,
         title: doc.title,
         fromDb: true,
-        status: '已从数据库恢复笔记',
+        status: '已恢复笔记',
       });
     } else {
       notesWindow.webContents.send('pet:event', {
         kind: 'notes_status',
         ts: Date.now(),
-        status: '已打开：手写笔记会实时保存，需要时点「一键整理」',
+        status: '已打开笔记',
       });
     }
   });
@@ -467,7 +457,7 @@ function openNotesWindow() {
   });
 
   return { ok: true, opened: true };
-}
+}//打开笔记函数
 
 function openChatWindow() {
   if (chatWindow && !chatWindow.isDestroyed()) {
@@ -500,7 +490,7 @@ function openChatWindow() {
   });
 
   return { ok: true, opened: true };
-}
+}//打开聊天页面，不用管它
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -540,7 +530,7 @@ function createWindow() {
       homeWindow.close();
     }
   });
-}
+}//窗口创建管理函数
 
 function flushStudyClock(at = Date.now()) {
   if (!studyClock || studyClock.paused) return;
@@ -549,7 +539,7 @@ function flushStudyClock(at = Date.now()) {
     addStudyMs(Math.min(delta, STUDY_CREDIT_CAP_MS), at);
   }
   studyClock.lastAt = at;
-}
+}//活跃度函数，简单的设计，不要碰
 
 function recordStudyActivity(payload) {
   if (!payload?.kind) return;
@@ -615,7 +605,7 @@ function recordStudyActivity(payload) {
     flushStudyClock(now);
     studyClock = null;
   }
-}
+}//专注力函数，后续需要修改容忍度，先放在这里后期修
 
 function onBridgeEvent(payload) {
   if (!payload || typeof payload !== 'object') return;
@@ -688,7 +678,7 @@ function onBridgeEvent(payload) {
     console.warn('[bili-pet] study activity record failed', err);
   }
   void notesOrganizer?.maybeHandle(payload);
-}
+}//账号绑定，但是数据库还在本地，空壳子函数，要改
 
 ipcMain.handle('pet:getLatest', () => latestEvent);
 
@@ -698,16 +688,13 @@ ipcMain.handle('pet:openChatPage', () => openChatWindow());
 
 ipcMain.handle('pet:goHome', (_event, opts) => goHome(opts || {}));
 
-/**
- * 用用户问题检索笔记块：优先当前视频，再补全库，去重后最多 5 条。
- * 元问题（篇数/最近一篇/这个视频）额外注入目录或当前笔记正文。
- */
+
 function isNotesMetaQuestion(question) {
   const q = String(question || '');
   return /几篇|多少.*笔记|有没有.*笔记|笔记.*(列表|目录|有哪些|一共)|最近.*(一篇)?笔记|我的笔记|笔记.*(内容|讲了|讲什么)|这个视频.*(讲|关于|内容)|当前.*(视频|笔记)/.test(
     q
   );
-}
+}//检索笔记
 
 function formatNotesCatalog(docs, { recentLimit = 5 } = {}) {
   const list = Array.isArray(docs) ? docs : [];
@@ -745,7 +732,6 @@ function retrieveNotesForChat(question) {
     pushAll(searchNoteChunks(q, { limit: 5 }));
   }
 
-  // 问「这个视频」但 chunk 没命中时，直接塞当前笔记正文前段
   if (
     currentBvid &&
     hits.length === 0 &&
@@ -782,7 +768,7 @@ function retrieveNotesForChat(question) {
   }
 
   return { hits, catalogText };
-}
+}//以上全都是笔记检索逻辑，按照关键词切块，比较脆弱但是目前还用不上向量，有时间再微调
 
 function formatNotesContext(hits) {
   if (!hits.length) return '';
@@ -792,7 +778,7 @@ function formatNotesContext(hits) {
       return `${i + 1}. [${h.bvid}${title}]\n${h.text}`;
     })
     .join('\n\n');
-}
+}//拼笔记函数
 
 ipcMain.handle('pet:chat', async (_event, payload = {}) => {
   const raw = Array.isArray(payload.messages) ? payload.messages : [];
@@ -805,7 +791,6 @@ ipcMain.handle('pet:chat', async (_event, payload = {}) => {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const question = lastUser?.content || '';
 
-  // 课程组管理指令：优先走 SQLite 结构化操作，再回落到普通笔记问答
   try {
     const courseResult = await tryHandleCourseChat(question, currentVideoMeta(), {
       history: messages,
@@ -830,7 +815,7 @@ ipcMain.handle('pet:chat', async (_event, payload = {}) => {
   const ragBlock = notesContext
     ? `【笔记库检索结果】下面是与用户问题相关的笔记摘录/目录。回答知识库/笔记类问题时，只能依据这些内容，不要编造；摘录不足以回答时明确说「我不知道」。\n\n${notesContext}`
     : '【笔记库检索结果】未检索到相关摘录。若用户在问笔记或知识库内容，请回答「我不知道」；普通闲聊或学习方法类问题可正常简短回复。';
-
+  //一些限定prompt，挪动会很麻烦
   try {
     const system = getSystemPrompt('chat');
     const history = messages.slice(0, -1);
@@ -858,7 +843,7 @@ ipcMain.handle('pet:chat', async (_event, payload = {}) => {
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
-});
+});//课程组内容切块
 
 ipcMain.handle('pet:notesLoad', (_event, payload = {}) => {
   const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim();
@@ -884,7 +869,6 @@ ipcMain.handle('pet:notesSave', (_event, payload = {}) => {
   return { ok: true, doc };
 });
 
-/** 关窗前同步落盘，避免 beforeunload 异步丢笔 */
 ipcMain.on('pet:notesSaveSync', (event, payload = {}) => {
   try {
     const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim();
@@ -907,7 +891,7 @@ ipcMain.on('pet:notesSaveSync', (event, payload = {}) => {
   } catch (err) {
     event.returnValue = { ok: false, error: err.message || String(err) };
   }
-});
+});//不知道啥时候写的复杂逻辑函数，但是不敢动
 
 ipcMain.handle('pet:notesOrganize', async (_event, payload = {}) => {
   const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim();
@@ -933,7 +917,7 @@ ipcMain.handle('pet:notesOrganize', async (_event, payload = {}) => {
     title: payload.title || '',
   });
   return result || { ok: false, error: 'organizer_unavailable' };
-});
+});//笔记整理函数
 
 ipcMain.handle('pet:notesSaveAsset', async (_event, payload = {}) => {
   const bvid = String(payload.bvid || currentBvidFromEvent() || '').trim() || '_draft';
@@ -1114,3 +1098,4 @@ if (gotTheLock) {
     if (process.platform !== 'darwin') app.quit();
   });
 }
+//以上几个全是笔记函数，建议AI维护，我已经不知道动什么了
