@@ -52,8 +52,16 @@ function render(state, settings) {
   if (accountEl) {
     const acc = state.biliAccount || {};
     if (acc.loggedIn && acc.uid) {
-      accountEl.textContent = `B 站账号：已登录 · UID ${acc.uid}（自动同步桌面宠）`;
-      accountEl.className = 'muted online';
+      if (acc.cookieOk === false) {
+        accountEl.textContent = `B 站账号：已识别 UID ${acc.uid}，但登录 Cookie 不完整（云端未连通）。请打开 bilibili.com 后点「重新同步账号」`;
+        accountEl.className = 'muted offline';
+      } else if (acc.cookieOk === true) {
+        accountEl.textContent = `B 站账号：已登录 · UID ${acc.uid}（Cookie 齐全，可连云端）`;
+        accountEl.className = 'muted online';
+      } else {
+        accountEl.textContent = `B 站账号：已登录 · UID ${acc.uid}（自动同步桌面宠）`;
+        accountEl.className = 'muted online';
+      }
     } else {
       accountEl.textContent =
         'B 站账号：未检测到登录 Cookie。请确认本 Chrome 已登录 B 站，或点下方「重新同步账号」';

@@ -318,7 +318,8 @@ async function recoverBridgeAccount() {
 
 async function pushAccountEvent(kind, account) {
   const settings = await getSettings();
-  const cookieHeader = await getBiliCookieHeader();
+  // Account events should see freshest cookies (login/logout)
+  const cookieHeader = await getBiliCookieHeader({ force: true });
   const payload = {
     v: cfg.SCHEMA_VERSION,
     source: cfg.SOURCE,
@@ -336,6 +337,11 @@ async function pushAccountEvent(kind, account) {
       uid: account?.uid ?? null,
       loggedIn: Boolean(account?.loggedIn),
       updatedAt: payload.ts,
+      cookieOk: Boolean(
+        cookieHeader &&
+          /(?:^|;\s*)bili_jct=/.test(cookieHeader) &&
+          /(?:^|;\s*)SESSDATA=/.test(cookieHeader)
+      ),
     },
   });
   await pushRealtime(payload, settings);
@@ -364,6 +370,7 @@ async function pushAccountEvent(kind, account) {
  */
 async function syncAccountFromCookies(opts = {}) {
   const force = Boolean(opts.force);
+  if (force) invalidateBiliCookieCache('force_sync');
   let account = await getBiliAccount();
   const hintUid = normalizeCookieUid(opts.hintUid);
   if (!account.uid && hintUid) {
@@ -678,21 +685,57 @@ async function handlePayload(payload, senderTab = null) {
   await pushRealtime(payload, settings);
 }
 
-async function getBiliCookieHeader() {
+/** Cached Cookie header for Bilibili auth (avoid re-scanning every heartbeat). */
+let cachedBiliCookieHeader = '';
+let cachedBiliCookieAt = 0;
+let cachedBiliCookieOk = false;
+const BILI_COOKIE_CACHE_MS = 60_000;
+const BILI_AUTH_COOKIE_NAMES = new Set([
+  'SESSDATA',
+  'bili_jct',
+  'DedeUserID',
+  'DedeUserID__ckMd5',
+  'sid',
+  'buvid3',
+  'buvid4',
+]);
+
+function invalidateBiliCookieCache(reason = '') {
+  cachedBiliCookieHeader = '';
+  cachedBiliCookieAt = 0;
+  cachedBiliCookieOk = false;
+  if (reason) {
+    console.log('[bili-pet] cookie cache invalidated:', reason);
+  }
+}
+
+function cookieHeaderIsOk(header) {
+  const h = String(header || '');
+  return Boolean(
+    h && /(?:^|;\s*)bili_jct=/.test(h) && /(?:^|;\s*)SESSDATA=/.test(h)
+  );
+}
+
+async function getBiliCookieHeader({ force = false } = {}) {
+  const now = Date.now();
+  if (
+    !force &&
+    cachedBiliCookieHeader &&
+    now - cachedBiliCookieAt < BILI_COOKIE_CACHE_MS
+  ) {
+    return cachedBiliCookieHeader;
+  }
+
   try {
     const byName = new Map();
     const merge = (list) => {
       for (const c of list || []) {
         if (!c?.name) continue;
-        // Prefer non-empty values; later sources overwrite
         if (c.value != null && String(c.value) !== '') {
           byName.set(c.name, String(c.value));
         }
       }
     };
-
-    merge(await chrome.cookies.getAll({ domain: 'bilibili.com' }));
-    merge(await chrome.cookies.getAll({ domain: '.bilibili.com' }));
 
     const urls = [
       'https://www.bilibili.com/',
@@ -700,18 +743,49 @@ async function getBiliCookieHeader() {
       'https://api.bilibili.com/',
       'https://passport.bilibili.com/',
       'https://account.bilibili.com/',
+      'https://space.bilibili.com/',
+      'https://m.bilibili.com/',
     ];
-    for (const url of urls) {
-      try {
-        merge(await chrome.cookies.getAll({ url }));
-      } catch {
-        /* ignore per-url failures */
+
+    // Parallel bulk reads (domain + url) — much cheaper than serial loops every heartbeat
+    const bulk = await Promise.all([
+      chrome.cookies.getAll({ domain: 'bilibili.com' }).catch(() => []),
+      chrome.cookies.getAll({ domain: '.bilibili.com' }).catch(() => []),
+      ...urls.map((url) => chrome.cookies.getAll({ url }).catch(() => [])),
+    ]);
+    for (const list of bulk) merge(list);
+
+    // Fill critical auth cookies if still missing (host-only / odd path)
+    const need = ['SESSDATA', 'bili_jct', 'DedeUserID', 'DedeUserID__ckMd5', 'sid'];
+    const missing = need.filter((n) => !byName.has(n));
+    if (missing.length) {
+      const extras = await Promise.all(
+        urls.flatMap((url) =>
+          missing.map(async (name) => {
+            try {
+              return await chrome.cookies.get({ url, name });
+            } catch {
+              return null;
+            }
+          })
+        )
+      );
+      for (const c of extras) {
+        if (c?.name && c.value) byName.set(c.name, String(c.value));
       }
     }
 
-    if (!byName.size) return '';
-    return [...byName.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+    if (!byName.size) {
+      invalidateBiliCookieCache();
+      return '';
+    }
+    const header = [...byName.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+    cachedBiliCookieHeader = header;
+    cachedBiliCookieAt = now;
+    cachedBiliCookieOk = cookieHeaderIsOk(header);
+    return header;
   } catch {
+    invalidateBiliCookieCache();
     return '';
   }
 }
@@ -908,7 +982,20 @@ async function pushExtensionHeartbeat() {
       cookieOk,
     },
     settings
-  );
+  ).then(async (ok) => {
+    // Keep popup state honest about cloud-usable cookies
+    if (account?.uid) {
+      await writeState({
+        biliAccount: {
+          uid: account.uid,
+          loggedIn: true,
+          updatedAt: Date.now(),
+          cookieOk,
+        },
+      });
+    }
+    return ok;
+  });
 }
 
 function cookieFieldFromHeader(header, name) {
@@ -1638,9 +1725,13 @@ async function pollAndRunPetCommands() {
 
 chrome.cookies.onChanged.addListener((changeInfo) => {
   const c = changeInfo?.cookie;
-  if (!c || c.name !== 'DedeUserID') return;
-  if (!String(c.domain || '').includes('bilibili.com')) return;
-  void syncAccountFromCookies();
+  if (!c || !String(c.domain || '').includes('bilibili.com')) return;
+  if (BILI_AUTH_COOKIE_NAMES.has(c.name)) {
+    invalidateBiliCookieCache(c.name);
+  }
+  if (c.name === 'DedeUserID') {
+    void syncAccountFromCookies();
+  }
 });
 
 // 心跳要够密：宠物启动后靠它解锁；太稀会表现为「登录了却要等一会儿」

@@ -547,6 +547,7 @@ function mapBiliError(result, fallback) {
 
 module.exports = {
   setBiliCookieHeader,
+  getBiliCookieHeader,
   addToWatchLater,
   addToDefaultFavorite,
   getRecentWatched,

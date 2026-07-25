@@ -138,12 +138,48 @@ async function handleAuthBili(req, res) {
   }
   await upsertUserLogin(verified.uid, verified.uname);
   const session = signToken(verified.uid);
-  res.json({ ok: true, ...session, uname: verified.uname || null });
+  res.json({ ok: true, ...session, uname: verified.uname || null, via: 'bili_cookie' });
+}
+
+/**
+ * Self-hosted bypass: prove possession of DEVICE_AUTH_SECRET + claim a uid.
+ * For private deployments when browser Cookie cannot be read by the extension.
+ * Set the same secret on desktop (.env CLOUD_DEVICE_SECRET) and cloud-api.
+ */
+function deviceAuthSecret() {
+  const fromEnv = String(
+    process.env.DEVICE_AUTH_SECRET || process.env.CLOUD_DEVICE_SECRET || ''
+  ).trim();
+  // Same test-distribution default as desktop CLOUD_DEVICE_SECRET
+  return fromEnv || '0703251607192333333';
+}
+
+async function handleAuthDevice(req, res) {
+  const expected = deviceAuthSecret();
+  if (!expected) {
+    res.status(503).json({ ok: false, error: 'device_auth_disabled' });
+    return;
+  }
+  const secret = String(req.body?.secret || req.body?.deviceSecret || '').trim();
+  const uid = normalizeUid(req.body?.uid);
+  const uname = String(req.body?.uname || '').trim().slice(0, 64) || null;
+  if (!uid) {
+    res.status(400).json({ ok: false, error: 'missing_uid' });
+    return;
+  }
+  if (!secret || secret !== expected) {
+    res.status(401).json({ ok: false, error: 'invalid_device_secret' });
+    return;
+  }
+  await upsertUserLogin(uid, uname);
+  const session = signToken(uid);
+  res.json({ ok: true, ...session, uname, via: 'device_secret' });
 }
 
 module.exports = {
   normalizeUid,
   authMiddleware,
   handleAuthBili,
+  handleAuthDevice,
   signToken,
 };

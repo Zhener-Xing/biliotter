@@ -50,7 +50,12 @@ function errText(res) {
   const code = res?.error || 'error';
   const map = {
     cloud_disabled: '未配置云端，无法使用好友功能',
-    no_token: '请先登录 B 站并完成云端鉴权',
+    no_token: '云端尚未鉴权成功，请保持 B 站打开并稍等几秒再试',
+    waiting_cookie: '请打开已登录的 bilibili.com，或配置 CLOUD_DEVICE_SECRET 走自建鉴权',
+    waiting_cloud_auth: '云端鉴权未完成，请稍后再试（或检查 CLOUD_DEVICE_SECRET 是否与服务器一致）',
+    device_auth_disabled: '未配置自建鉴权密钥',
+    invalid_device_secret: '自建鉴权密钥不匹配',
+    auth_failed: '云端鉴权失败，请检查密钥或稍后重试',
     invalid_pin: '请输入 4 位数字密钥',
     pin_taken: '这个密钥正被占用，换一组数字',
     invite_not_found: '密钥无效或已过期',

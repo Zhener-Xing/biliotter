@@ -3,7 +3,7 @@
 require('dotenv').config();
 
 const express = require('express');
-const { authMiddleware, handleAuthBili } = require('./auth');
+const { authMiddleware, handleAuthBili, handleAuthDevice } = require('./auth');
 const { handleKbChanges, handleKbPush, handleKbRevision } = require('./kb');
 const {
   handlePresence,
@@ -41,6 +41,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/auth/bili', wrap('auth/bili', handleAuthBili));
+app.post('/auth/device', wrap('auth/device', handleAuthDevice));
 
 app.get('/kb/revision', authMiddleware, wrap('kb/revision', handleKbRevision));
 app.get('/kb/changes', authMiddleware, wrap('kb/changes', handleKbChanges));

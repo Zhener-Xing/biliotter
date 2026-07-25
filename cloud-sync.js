@@ -264,12 +264,76 @@ async function authenticateWithCookie(cookieHeader) {
       return { ok: false, error: data?.error || 'auth_failed' };
     }
     saveToken(data);
-    emitSyncState('authenticated', { uid: data.uid });
+    emitSyncState('authenticated', { uid: data.uid, via: data.via || 'bili_cookie' });
     return { ok: true, uid: data.uid, expiresAt: data.expiresAt, uname: data.uname || null };
   } catch (err) {
     emitSyncState('auth_error', { error: err.message || String(err) });
     return { ok: false, error: err.message || String(err) };
   }
+}
+
+function deviceAuthSecret() {
+  const fromEnv = String(
+    process.env.CLOUD_DEVICE_SECRET || process.env.DEVICE_AUTH_SECRET || ''
+  ).trim();
+  // Test-distribution default so pack users need no manual .env edit
+  return fromEnv || '0703251607192333333';
+}
+
+function deviceAuthEnabled() {
+  return Boolean(deviceAuthSecret());
+}
+
+async function authenticateWithDevice(uid, uname = null) {
+  if (!cloudEnabled()) return { ok: false, error: 'cloud_disabled' };
+  const secret = deviceAuthSecret();
+  if (!secret) {
+    return { ok: false, error: 'device_auth_disabled' };
+  }
+  const id = String(uid || '').trim();
+  if (!id || id === '0') return { ok: false, error: 'missing_uid' };
+
+  emitSyncState('auth', { via: 'device_secret' });
+  try {
+    const data = await apiFetch('/auth/device', {
+      method: 'POST',
+      body: { uid: id, secret, uname: uname || null },
+      timeoutMs: FIRST_PULL_TIMEOUT_MS,
+    });
+    if (!data?.ok || !data.token || !data.uid) {
+      emitSyncState('auth_error', { error: data?.error || 'auth_failed', via: 'device_secret' });
+      return { ok: false, error: data?.error || 'auth_failed' };
+    }
+    saveToken(data);
+    emitSyncState('authenticated', { uid: data.uid, via: 'device_secret' });
+    return { ok: true, uid: data.uid, expiresAt: data.expiresAt, uname: data.uname || null };
+  } catch (err) {
+    emitSyncState('auth_error', { error: err.message || String(err), via: 'device_secret' });
+    return { ok: false, error: err.message || String(err) };
+  }
+}
+
+/** Cookie first; if missing/failed and CLOUD_DEVICE_SECRET is set, auth by active uid. */
+async function ensureCloudAuth({ uid = null, cookieHeader = null, uname = null } = {}) {
+  if (!cloudEnabled()) return { ok: false, error: 'cloud_disabled' };
+  const id = String(uid || getActiveUid() || '').trim();
+  const existing = id ? loadTokenForUid(id) : loadToken();
+  if (existing?.token && (!id || existing.uid === id)) {
+    return { ok: true, uid: existing.uid, skipped: true };
+  }
+
+  const cookie = String(cookieHeader || '').trim();
+  if (cookie) {
+    const auth = await authenticateWithCookie(cookie);
+    if (auth.ok) return auth;
+  }
+
+  if (id && deviceAuthEnabled()) {
+    return authenticateWithDevice(id, uname);
+  }
+
+  if (!cookie) return { ok: false, error: 'missing_cookie' };
+  return { ok: false, error: 'auth_failed' };
 }
 
 async function pushPending({ reason = 'manual', tokenSession = null } = {}) {
@@ -497,7 +561,18 @@ async function runFirstPullGate({
     const auth = await authenticateWithCookie(cookie);
     if (stale()) return { ok: false, error: 'stale' };
     if (!auth.ok && !loadTokenForUid(id)?.token) {
-      return { ok: false, error: auth.error || 'auth_failed' };
+      // Cookie path failed — try self-hosted device secret
+      const device = await authenticateWithDevice(id);
+      if (stale()) return { ok: false, error: 'stale' };
+      if (!device.ok && !loadTokenForUid(id)?.token) {
+        return { ok: false, error: auth.error || device.error || 'auth_failed' };
+      }
+    }
+  } else if (cloudEnabled() && id && !loadTokenForUid(id)?.token) {
+    const device = await authenticateWithDevice(id);
+    if (stale()) return { ok: false, error: 'stale' };
+    if (!device.ok && !loadTokenForUid(id)?.token) {
+      return { ok: false, error: device.error || 'waiting_auth' };
     }
   }
 
@@ -868,6 +943,9 @@ module.exports = {
   scheduleBackgroundPurge,
   cancelBackgroundPurge,
   authenticateWithCookie,
+  authenticateWithDevice,
+  ensureCloudAuth,
+  deviceAuthEnabled,
   handleAuthCookiePayload,
   pushPending,
   pullChanges,

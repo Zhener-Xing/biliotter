@@ -1007,8 +1007,30 @@ function unlockLocalSession(uid, payload = {}) {
       },
       payload
     );
-  } else if (payload.cookieHeader) {
-    void handleAuthCookiePayload(payload);
+  } else {
+    // Already live locally: still need cloud JWT if missing
+    const hasToken = Boolean(loadTokenForUid(id)?.token);
+    const cookie =
+      payload.cookieHeader ||
+      payload.account?.cookieHeader ||
+      getBiliCookieHeader() ||
+      '';
+    if (cloudEnabled() && !hasToken) {
+      const { ensureCloudAuth } = require('./cloud-sync');
+      void ensureCloudAuth({
+        uid: id,
+        cookieHeader: cookie || null,
+      }).then((result) => {
+        if (!result?.ok) {
+          console.warn(
+            '[bili-pet] cloud auth retry failed:',
+            result?.error || 'auth_failed'
+          );
+        } else if (!result.skipped) {
+          console.log('[bili-pet] cloud auth ok uid=', result.uid, result.via || '');
+        }
+      });
+    }
   }
   return { ok: true, uid: id, status: 'logged_in' };
 }

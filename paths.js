@@ -48,17 +48,54 @@ function setDataRoot(dir) {
   return dataRoot;
 }
 
-/** First packaged launch: seed .env from example if missing. */
+/** First packaged launch: seed .env from example if missing.
+ * Also fill blank CLOUD_API_BASE / CLOUD_DEVICE_SECRET from .env.example. */
 function ensureEnvFile() {
   const dest = dataPath('.env');
-  if (fs.existsSync(dest)) return dest;
   const example = path.join(APP_ROOT, '.env.example');
-  if (fs.existsSync(example)) {
-    try {
-      fs.copyFileSync(example, dest);
-    } catch (err) {
-      console.warn('[bili-pet] seed .env failed:', err?.message || err);
+  if (!fs.existsSync(dest)) {
+    if (fs.existsSync(example)) {
+      try {
+        fs.copyFileSync(example, dest);
+      } catch (err) {
+        console.warn('[bili-pet] seed .env failed:', err?.message || err);
+      }
     }
+    return dest;
+  }
+
+  try {
+    if (!fs.existsSync(example)) return dest;
+    const exampleText = fs.readFileSync(example, 'utf8');
+    let text = fs.readFileSync(dest, 'utf8');
+    let changed = false;
+
+    const fillBlank = (key) => {
+      const mEx = exampleText.match(new RegExp(`^${key}=(.*)$`, 'm'));
+      const shared = String(mEx?.[1] || '')
+        .trim()
+        .replace(/^['"]|['"]$/g, '');
+      if (!shared) return;
+      const mCur = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
+      const cur = String(mCur?.[1] || '')
+        .trim()
+        .replace(/^['"]|['"]$/g, '');
+      if (cur) return;
+      if (mCur) {
+        text = text.replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${shared}`);
+      } else {
+        text = `${text.replace(/\s*$/, '')}\n${key}=${shared}\n`;
+      }
+      changed = true;
+      console.log(`[bili-pet] filled empty ${key}`);
+    };
+
+    fillBlank('CLOUD_API_BASE');
+    fillBlank('CLOUD_DEVICE_SECRET');
+
+    if (changed) fs.writeFileSync(dest, text, 'utf8');
+  } catch (err) {
+    console.warn('[bili-pet] merge .env defaults failed:', err?.message || err);
   }
   return dest;
 }

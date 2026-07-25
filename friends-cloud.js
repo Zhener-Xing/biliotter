@@ -1,7 +1,9 @@
 'use strict';
 
-const { cloudEnabled, loadToken, apiFetch } = require('./cloud-sync');
+const { cloudEnabled, loadToken, apiFetch, ensureCloudAuth } = require('./cloud-sync');
 const { isAccountOpsReady } = require('./session-gate');
+const { getBiliCookieHeader } = require('./bili-web-api');
+const { getActiveUid } = require('./notes-db');
 
 const INBOX_POLL_MS = 8_000;
 const PRESENCE_MS = 30_000;
@@ -14,15 +16,43 @@ let presenceTimer = null;
 let polling = false;
 /** @type {Set<number>} */
 const seenEventIds = new Set();
+let authRetryAt = 0;
+const AUTH_RETRY_GAP_MS = 8_000;
 
 function getUname() {
   return loadToken()?.uname || null;
 }
 
+async function ensureCloudToken() {
+  let session = loadToken();
+  if (session?.token) return session;
+  if (!cloudEnabled()) return null;
+
+  const now = Date.now();
+  if (now - authRetryAt < AUTH_RETRY_GAP_MS) return loadToken();
+  authRetryAt = now;
+
+  const cookie = String(getBiliCookieHeader() || '').trim();
+  const uid = getActiveUid();
+  const auth = await ensureCloudAuth({
+    uid,
+    cookieHeader: cookie || null,
+  });
+  if (!auth?.ok) return null;
+  return loadToken();
+}
+
 async function cloudCall(pathname, { method = 'GET', body = null } = {}) {
   if (!cloudEnabled()) return { ok: false, error: 'cloud_disabled' };
-  const session = loadToken();
-  if (!session?.token) return { ok: false, error: 'no_token' };
+  let session = await ensureCloudToken();
+  if (!session?.token) {
+    const cookie = String(getBiliCookieHeader() || '').trim();
+    const { deviceAuthEnabled } = require('./cloud-sync');
+    if (!cookie && !deviceAuthEnabled()) {
+      return { ok: false, error: 'waiting_cookie' };
+    }
+    return { ok: false, error: 'waiting_cloud_auth' };
+  }
   try {
     const data = await apiFetch(pathname, {
       method,
@@ -32,9 +62,35 @@ async function cloudCall(pathname, { method = 'GET', body = null } = {}) {
     });
     return data && typeof data === 'object' ? data : { ok: false, error: 'bad_response' };
   } catch (err) {
+    const code = err?.data?.error || err.message || String(err);
+    // Token expired / rejected → clear and try once more after re-auth
+    if (err?.status === 401) {
+      authRetryAt = 0;
+      session = await ensureCloudToken();
+      if (session?.token) {
+        try {
+          const data = await apiFetch(pathname, {
+            method,
+            body,
+            token: session.token,
+            timeoutMs: 12_000,
+          });
+          return data && typeof data === 'object' ? data : { ok: false, error: 'bad_response' };
+        } catch (err2) {
+          return {
+            ok: false,
+            error: err2?.data?.error || err2.message || String(err2),
+            status: err2?.status,
+            data: err2?.data || null,
+            retryAfterMs: err2?.data?.retryAfterMs,
+          };
+        }
+      }
+      return { ok: false, error: 'waiting_cloud_auth' };
+    }
     return {
       ok: false,
-      error: err?.data?.error || err.message || String(err),
+      error: code,
       status: err?.status,
       data: err?.data || null,
       retryAfterMs: err?.data?.retryAfterMs,
