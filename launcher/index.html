@@ -756,6 +756,7 @@
 
       /* —— 右侧正文 —— */
       .main {
+        position: relative;
         display: flex;
         flex-direction: column;
         min-width: 0;
@@ -775,6 +776,71 @@
       }
 
       .main-toolbar[hidden] { display: none !important; }
+
+      .share-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(59, 42, 31, 0.35);
+      }
+
+      .share-overlay[hidden] { display: none !important; }
+
+      .share-panel {
+        width: min(420px, calc(100% - 48px));
+        max-height: min(480px, calc(100% - 48px));
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 16px;
+        border: 4px solid var(--line);
+        background: var(--panel);
+        box-shadow: 6px 6px 0 var(--line);
+      }
+
+      .share-panel h3 {
+        font-size: 16px;
+        margin: 0;
+      }
+
+      .share-hint,
+      .share-empty {
+        font-size: 13px;
+        color: var(--muted, #7a6352);
+        margin: 0;
+      }
+
+      .share-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 280px;
+        overflow: auto;
+      }
+
+      .share-list li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+      }
+
+      .share-list .name {
+        font-size: 14px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
 
       .btn {
         appearance: none;
@@ -1357,6 +1423,7 @@
         <div class="main-toolbar" id="toolbar-preview" hidden>
           <button type="button" class="btn" id="btn-close-note">关闭</button>
           <button type="button" class="btn primary" id="btn-edit">编辑</button>
+          <button type="button" class="btn" id="btn-share-note">传给好友</button>
           <button type="button" class="btn" id="btn-assign-course">加入课程组</button>
           <span class="spacer"></span>
           <button type="button" class="btn danger" id="btn-delete-preview">删除</button>
@@ -1365,6 +1432,7 @@
         <div class="main-toolbar" id="toolbar-edit" hidden>
           <button type="button" class="btn" id="btn-back-preview">‹ 预览</button>
           <button type="button" class="btn primary" id="btn-save">保存</button>
+          <button type="button" class="btn" id="btn-share-note-edit">传给好友</button>
           <button type="button" class="btn" id="btn-assign-course-edit">加入课程组</button>
           <span class="spacer"></span>
           <button type="button" class="btn danger" id="btn-delete-edit">删除</button>
@@ -1437,6 +1505,16 @@
           </div>
         </div>
         <div class="heat-tip" id="heat-tip" hidden></div>
+
+        <div class="share-overlay" id="share-overlay" hidden>
+          <div class="share-panel" role="dialog" aria-labelledby="share-title">
+            <h3 id="share-title">传给好友</h3>
+            <p class="share-hint" id="share-hint">选择好友发送当前笔记</p>
+            <ul class="share-list" id="share-list"></ul>
+            <p class="share-empty" id="share-empty" hidden>还没有好友。请先右键桌宠加好友。</p>
+            <button type="button" class="btn" id="btn-share-cancel">取消</button>
+          </div>
+        </div>
 
         <div class="pane" id="pane-preview" hidden>
           <p class="doc-meta" id="preview-meta"></p>
@@ -2800,6 +2878,80 @@
           titleInput.focus();
         }
 
+        function hideShareNotePanel() {
+          const overlay = document.getElementById("share-overlay");
+          if (overlay) overlay.hidden = true;
+        }
+
+        async function openShareNotePanel() {
+          if (!activeBvid) {
+            showToast("请先打开一篇笔记");
+            return;
+          }
+          if (mode === "edit" && dirty) {
+            await saveCurrent({ silent: true });
+          }
+          const body = String(bodyInput.value || "").trim();
+          if (!body) {
+            showToast("笔记是空的，写点内容再传");
+            return;
+          }
+          if (!window.biliPet || typeof window.biliPet.friendsList !== "function") {
+            showToast("当前窗口无法访问好友功能");
+            return;
+          }
+          const overlay = document.getElementById("share-overlay");
+          const listEl = document.getElementById("share-list");
+          const emptyEl = document.getElementById("share-empty");
+          const hintEl = document.getElementById("share-hint");
+          if (!overlay || !listEl) return;
+          listEl.innerHTML = "";
+          if (hintEl) hintEl.textContent = "发送：「" + (titleInput.value || activeBvid) + "」";
+          try {
+            const res = await window.biliPet.friendsList();
+            if (!res || !res.ok) {
+              showToast(
+                res && res.error === "waiting_cookie"
+                  ? "云端未就绪，请稍后再试"
+                  : "无法加载好友：" + ((res && res.error) || "unknown")
+              );
+              return;
+            }
+            const friends = Array.isArray(res.friends) ? res.friends : [];
+            if (emptyEl) emptyEl.hidden = friends.length > 0;
+            friends.forEach(function (f) {
+              const li = document.createElement("li");
+              const name = document.createElement("span");
+              name.className = "name";
+              name.textContent = f.uname || "UID " + f.uid;
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "btn primary";
+              btn.textContent = "发送";
+              btn.addEventListener("click", async function () {
+                btn.disabled = true;
+                const r = await window.biliPet.friendsNoteShare(f.uid, activeBvid);
+                if (r && r.ok) {
+                  showToast("已传给「" + name.textContent + "」，等待对方接收");
+                  hideShareNotePanel();
+                } else if (r && r.error === "already_sent") {
+                  showToast("这篇笔记已经传给过对方，不能再发");
+                  btn.disabled = false;
+                } else {
+                  showToast("发送失败：" + ((r && r.error) || "unknown"));
+                  btn.disabled = false;
+                }
+              });
+              li.appendChild(name);
+              li.appendChild(btn);
+              listEl.appendChild(li);
+            });
+            overlay.hidden = false;
+          } catch (err) {
+            showToast(err.message || "打开分享面板失败");
+          }
+        }
+
         async function saveCurrent(opts) {
           opts = opts || {};
           if (!activeBvid) return;
@@ -3252,6 +3404,16 @@
           closeNoteView();
         });
         document.getElementById("btn-edit").addEventListener("click", showEdit);
+        document.getElementById("btn-share-note").addEventListener("click", function () {
+          void openShareNotePanel();
+        });
+        document.getElementById("btn-share-note-edit").addEventListener("click", function () {
+          void openShareNotePanel();
+        });
+        document.getElementById("btn-share-cancel").addEventListener("click", hideShareNotePanel);
+        document.getElementById("share-overlay").addEventListener("click", function (e) {
+          if (e.target && e.target.id === "share-overlay") hideShareNotePanel();
+        });
         document.getElementById("btn-back-preview").addEventListener("click", async function () {
           if (dirty) await saveCurrent({ silent: true });
           renderMarkdownInto(previewBody, bodyInput.value);

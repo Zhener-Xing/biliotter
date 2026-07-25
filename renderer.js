@@ -234,6 +234,7 @@ function playSequence(frames, loops = 1) {
   pointing = false;
   sequencePlaying = true;
   stopFrameLoop();
+  clearDanceOffset();
   frameIndex = 0;
   let loopCount = 0;
   setSpriteSrc(frames[0]);
@@ -252,10 +253,53 @@ function playSequence(frames, loops = 1) {
   }, FRAME_MS);
 }
 
+/**
+ * 摸头反应：dancing-buffer 循环 2 次 → look-away 循环 1 次 → 回到待机/专注。
+ * 可打断普通序列，但不打断账号同步舞 / 游戏出题舞。
+ */
+function playPetHeadAnim() {
+  if (!petSprite || syncBuffering || gameDance) return;
+  pointing = false;
+  sequencePlaying = true;
+  stopFrameLoop();
+  frameIndex = 0;
+  let danceLoops = 0;
+  applyDanceFrame(DANCE_BUFFER[0]);
+
+  frameTimer = setInterval(() => {
+    frameIndex += 1;
+    if (frameIndex >= DANCE_BUFFER.length) {
+      danceLoops += 1;
+      frameIndex = 0;
+      if (danceLoops >= 2) {
+        stopFrameLoop();
+        clearDanceOffset();
+        // look-away 播一轮
+        const look = ANIM.point;
+        let lookIndex = 0;
+        setSpriteSrc(look[0]);
+        frameTimer = setInterval(() => {
+          lookIndex += 1;
+          if (lookIndex >= look.length) {
+            sequencePlaying = false;
+            stopFrameLoop();
+            applyBaseAnim();
+            return;
+          }
+          setSpriteSrc(look[lookIndex]);
+        }, FRAME_MS);
+        return;
+      }
+    }
+    applyDanceFrame(DANCE_BUFFER[frameIndex]);
+  }, DANCE_FRAME_MS);
+}
+
 function playPointOnce() {
   if (!petSprite || pointing || sequencePlaying || syncBuffering || gameDance) return;
   pointing = true;
   stopFrameLoop();
+  clearDanceOffset();
   const frames = ANIM.point;
   frameIndex = 0;
   setSpriteSrc(frames[0]);
@@ -507,7 +551,7 @@ function handleEvent(payload) {
     case 'friend_pet': {
       const msg = String(payload.message || '').trim();
       if (msg) showPetBubble(msg, 6500);
-      playPointOnce();
+      playPetHeadAnim();
       petSprite?.classList.add('pet-alert');
       setTimeout(() => petSprite?.classList.remove('pet-alert'), 1200);
       break;

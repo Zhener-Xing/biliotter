@@ -44,8 +44,24 @@ body {
   justify-content: space-between;
   gap: 12px;
   flex-shrink: 0;
+  flex-wrap: wrap;
   padding-bottom: 10px;
   border-bottom: 3px solid #3b2a1f;
+}
+
+.notes-bar-text {
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.notes-bar-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+  flex: 0 0 auto;
 }
 
 .notes-kicker {
@@ -68,13 +84,6 @@ body {
   font-size: 8px;
   line-height: 1.6;
   color: #8f5e32;
-}
-
-.notes-bar-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  -webkit-app-region: no-drag;
 }
 
 .notes-organize {

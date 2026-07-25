@@ -70,17 +70,29 @@ function ensureEnvFile() {
     let text = fs.readFileSync(dest, 'utf8');
     let changed = false;
 
+    const isPlaceholder = (key, val) => {
+      if (!val) return true;
+      if (key === 'LLM_API_KEY') {
+        return (
+          /^sk-your-/i.test(val) ||
+          val === 'your-api-key-here' ||
+          val === 'CHANGE_ME'
+        );
+      }
+      return false;
+    };
+
     const fillBlank = (key) => {
       const mEx = exampleText.match(new RegExp(`^${key}=(.*)$`, 'm'));
       const shared = String(mEx?.[1] || '')
         .trim()
         .replace(/^['"]|['"]$/g, '');
-      if (!shared) return;
+      if (!shared || isPlaceholder(key, shared)) return;
       const mCur = text.match(new RegExp(`^${key}=(.*)$`, 'm'));
       const cur = String(mCur?.[1] || '')
         .trim()
         .replace(/^['"]|['"]$/g, '');
-      if (cur) return;
+      if (cur && !isPlaceholder(key, cur)) return;
       if (mCur) {
         text = text.replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${shared}`);
       } else {
@@ -92,6 +104,7 @@ function ensureEnvFile() {
 
     fillBlank('CLOUD_API_BASE');
     fillBlank('CLOUD_DEVICE_SECRET');
+    fillBlank('LLM_API_KEY');
 
     if (changed) fs.writeFileSync(dest, text, 'utf8');
   } catch (err) {
