@@ -1,6 +1,6 @@
 # BiliOtter
 
-桌面学习宠物：在 B 站看知识区视频时，用像素风水獭盯专注、记笔记、出测验，并把知识库按账号隔离与云端同步。
+桌面学习宠物：在 B 站看知识区视频时，用像素风水獭盯专注、记笔记、出测验；知识库按账号隔离并可云端同步；支持好友摸獭与笔记互传。
 
 ---
 
@@ -9,15 +9,15 @@
 ### 桌面宠物
 
 - Electron 置顶小窗，像素动画反馈学习状态（等待、观看、分心、提问、跳舞等）
-- 气泡提示：插件离线、登录中、同步中、专注中断等
-- 点击宠物可打开笔记 / 知识库首页
+- 气泡提示：插件离线、登录中、同步中、专注中断、好友摸獭 / 笔记到达等
+- **单击**打开当前视频笔记；**双击**打开知识库首页；**右键**打开好友与摸獭窗口
 
 ### B 站学习桥（浏览器扩展）
 
 - 记录视频观看进度与字幕
 - 检测切页、失焦、换 BV 等专注中断，实时同步给桌面端
-- 探测 B 站登录态，把账号与 Cookie 经本机桥传给 Electron
-- 桌面端可通过桥向扩展下发指令（如配合学习流程）
+- 用 `chrome.cookies` 探测 B 站登录态（`DedeUserID` / `SESSDATA` / `bili_jct` 等），把账号与 Cookie 经本机桥传给 Electron
+- 桌面端可通过桥向扩展下发指令（如配合学习流程、稍后再看 / 收藏）
 
 ### 知识库与笔记
 
@@ -87,44 +87,70 @@
 - 写 B 站稍后再看/收藏时，优先走扩展代发；需已登录且插件在线
 - 与测验互斥：开 `/game` 时会重置进行中的 plan 会话
 
+### 好友与分享（需云端）
+
+依赖已配置的 `CLOUD_API_BASE`；未配云端时右键好友会提示不可用。
+
+| 能力 | 说明 |
+|------|------|
+| 加好友 | 生成 **4 位数字密钥**（可设 5～60 分钟有效），对方输入同一密钥即可互加 |
+| 摸獭 | 好友列表里可「摸」对方桌宠；对方气泡提示 + 摸头动画；同一对好友约 **5 分钟**冷却 |
+| 传笔记 | 知识库首页笔记页点「传给好友」→ 选好友发送；对方收件箱可接受 / 拒绝 |
+| 接收笔记 | 接受后写入本机知识库（独立 `share_…` bvid，不覆盖你自己的同名视频笔记） |
+| 在线态 | 桌面端定时 presence 心跳；列表可显示好友是否在线（约 90 秒窗口） |
+
+入口：桌宠 **右键** →「好友与摸獭」窗口；笔记分享在 `launcher` 知识库页。
+
 ### 云端同步（可选）
 
-- 用 B 站登录态换 JWT，按账号同步知识库变更
-- 支持 revision / 增量 pull、push pending、退出前 flush
+- **鉴权优先**：扩展传来的 B 站 Cookie → `POST /auth/bili` 换 JWT
+- **回退**：Cookie 缺失或失败时，可用 `CLOUD_DEVICE_SECRET`（与云端 `DEVICE_AUTH_SECRET` 一致）→ `POST /auth/device`，按当前 uid 签发 JWT（便于自建 / 测试分发）
+- 按账号同步知识库变更：revision / 增量 pull、push pending、退出前 flush
+- 好友、摸獭、笔记互传走同一套 JWT（`cloud-api` 的 `/friends/*`）
 
 ---
 
 ## 2. 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 桌面端 | Electron（主进程 CommonJS）、本地 HTTP Bridge（`127.0.0.1:39261`） |
-| 浏览器 | Chrome Manifest V3 扩展（service worker + content scripts） |
-| 本地数据 | Node 内置 `node:sqlite`、按 uid 分库、笔记资源目录 |
-| 本地 RAG | Markdown 切块 + SQLite **FTS5**（bm25；无向量库） |
-| AI | 可配置 LLM API（如 DeepSeek）、任务化 system prompt（`prompts/`）、Skills（`skills/`） |
-| 云端 API | Node.js + Express、JWT、MySQL（`cloud-api/`） |
-| 前端页面 | 原生 HTML/CSS/JS；笔记侧 KaTeX / marked；导图 Markmap / D3 |
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| 桌面端 | **Electron**（主进程 CommonJS） | 入口 `canva.js`；preload 经 `contextBridge` 暴露 `window.biliPet` |
+| 本机桥 | Node `http`，监听 `127.0.0.1:39261` | `bridge-server.js`：扩展 ↔ 桌面实时通信 |
+| 浏览器扩展 | Chrome **Manifest V3** | service worker + content scripts；`chrome.cookies` 读登录态 |
+| 本地数据 | Node 内置 **`node:sqlite`** | 按 B 站 uid 分库；笔记资源目录；自定义协议 `bilinotes://` |
+| 本地 RAG | Markdown 切块 + SQLite **FTS5** | bm25 / LIKE 回退；**无**向量库 / embedding |
+| AI | OpenAI 兼容 HTTP API（如 DeepSeek） | `llm.js` + `prompts/` + `skills/`（测验、学习计划） |
+| 云端 API | **Node.js + Express + JWT + MySQL** | `cloud-api/`：鉴权、知识库同步、好友、笔记分享 |
+| 桌面 UI | 原生 HTML / CSS / JS | 桌宠、聊天、好友窗、知识库 launcher、康奈尔笔记 |
+| 笔记渲染 | **KaTeX**、**marked**、DOMPurify | 公式 / Markdown |
+| 思维导图 | **Markmap** + **D3** | 课程组导图 |
+| 打包 | 自研 `scripts/pack-*.js` | 扩展 zip + Electron 目录 / Windows zip（可交叉打包） |
+| 运行时配置 | `.env`（`dotenv` 风格，`load-env.js`） | `LLM_*`、`CLOUD_API_BASE`、`CLOUD_DEVICE_SECRET` |
 
 **仓库结构（简要）**
 
 ```
 bili-pet/
 ├── canva.js                 # Electron 主进程入口
-├── paths.js                 # 开发/打包后的数据目录解析
-├── scripts/pack-*.js        # npm run pack → dist/
+├── paths.js                 # 开发/打包后的数据目录与 .env 种子
+├── preload.js               # 渲染进程 IPC 桥
+├── scripts/                 # start / pack / 校验脚本
 ├── face.html / renderer.js  # 桌宠窗口
 ├── bridge-server.js         # 扩展 ↔ 桌面 本机桥
-├── notes-db.js              # 本地知识库
-├── cloud-sync.js            # 云同步客户端
+├── notes-db.js              # 本地知识库 + FTS 切块
+├── cloud-sync.js            # 云同步 / 鉴权客户端
+├── friends-cloud.js         # 好友 / 摸獭 / 笔记分享客户端
+├── bili-web-api.js          # B 站 Web API（稍后再看等）
 ├── account-bind.js          # 账号绑定状态
+├── session-gate.js          # 门禁（登录 / 挂库 / 首拉）
 ├── skills/                  # 测验、学习计划等 Skill
 ├── prompts/                 # LLM 系统提示词
 ├── chat/                    # 聊天窗
+├── friends/                 # 好友与摸獭窗口
 ├── note_cornell/            # 康奈尔笔记页
 ├── launcher/                # 知识库首页（含本地 server）
 ├── internet_extension/      # Bili Pet Bridge 扩展
-└── cloud-api/               # 鉴权 + 知识库同步服务
+└── cloud-api/               # 鉴权 + KB 同步 + 好友 / 分享
 ```
 
 详细安装见下一节。
@@ -154,10 +180,11 @@ cd biliotter
 cp .env.example .env
 ```
 
-用编辑器打开 `.env`，至少填写：
+用编辑器打开 `.env`，按需填写：
 
-- `LLM_API_KEY`，填写你自己的API KEY
-- 若使用云同步：`CLOUD_API_BASE=https://你的云端地址`（不填则纯本地）
+- `LLM_API_KEY`：你自己的 API Key（聊天 / 测验 / 整理笔记等）
+- `CLOUD_API_BASE`：云端 API 根地址（不填则纯本地；好友 / 分享不可用）
+- `CLOUD_DEVICE_SECRET`（可选）：与云端 `DEVICE_AUTH_SECRET` 一致时，Cookie 读不到也能按 uid 换 JWT
 
 6. 安装依赖并启动桌宠：
 
@@ -277,8 +304,9 @@ npm start
 | 扩展图标 / Popup | 显示与桌宠桥连通（非长期离线） |
 | 已登录 B 站 | 宠物侧完成账号绑定；需要时出现同步提示 |
 | 聊天 / 笔记 | 门禁通过后可打开；未配 LLM Key 则 AI 能力不可用 |
+| 好友（已配云端） | 右键桌宠打开好友窗；可生成 / 输入 4 位密钥 |
 
-常见问题：扩展显示离线 → 先确认桌宠已启动；换号后笔记「消失」→ 见「一人一獭」（旧号本地已 purge，需同一账号从云端拉回）。
+常见问题：扩展显示离线 → 先确认桌宠已启动；换号后笔记「消失」→ 见「一人一獭」（旧号本地已 purge，需同一账号从云端拉回）；好友提示未鉴权 → 打开已登录的 bilibili.com，或确认 `CLOUD_DEVICE_SECRET` 与服务器一致。
 
 ---
 
@@ -314,13 +342,14 @@ npm run pack:win
 1. 打开桌宠（macOS：`BiliOtter.app`；Windows：解压 zip 后运行 `BiliOtter.exe`）
 2. 解压 `bili-pet-bridge.zip` → 浏览器扩展指向该文件夹  
    （桌宠包内也有一份：macOS 多为 `BiliOtter.app/Contents/Resources/bili-pet-bridge`；Windows 在 `resources/bili-pet-bridge`）
-3. 编辑桌宠数据目录里的 `.env`，填入 `LLM_API_KEY`（首次启动会从示例复制一份）  
+3. 按需编辑桌宠数据目录里的 `.env`  
+   - 首次启动会从 `.env.example` **复制 / 补全**空的 `CLOUD_API_BASE`、`CLOUD_DEVICE_SECRET`、`LLM_API_KEY`（小范围测试分发可直接用示例默认值；生产请换成自己的）  
    - macOS：`~/Library/Application Support/BiliOtter/.env`  
    - Windows：`%APPDATA%\BiliOtter\.env`
 
 只打扩展：`npm run pack:ext`。只打本机桌宠：`npm run pack:app`。扩展 + 本机 + Windows：`npm run pack:all`。
 
-开发时仍用 `npm start`；运行时数据仍写在仓库根目录。只有**打包后的应用**才写入系统 userData。
+开发时仍用 `npm start`；运行时数据仍写在仓库根目录。只有**打包后的应用**才写入系统 userData（由 `paths.js` 解析）。
 
 > 当前为未签名包：macOS 可能需「右键 → 打开」或在「隐私与安全性」里允许；Windows 可能被 SmartScreen 拦截，选仍要运行即可。
 
@@ -390,18 +419,20 @@ npm run pack:win
 
 ### 云端鉴权与租户隔离
 
-- **换票**：用浏览器里的 B 站 Cookie 调 `api.bilibili.com` 校验真实 `mid`，通过后才签发 **JWT**（payload 含 `uid`）  
-- **后续请求**：知识库 pull / push 只带 `Authorization: Bearer …`，服务端按 JWT 里的 `uid` 过滤行（`WHERE uid = …`），账号之间数据不串  
+- **换票（优先）**：用浏览器里的 B 站 Cookie 调 `api.bilibili.com` 校验真实 `mid`，通过后才签发 **JWT**（payload 含 `uid`）  
+- **换票（回退）**：`CLOUD_DEVICE_SECRET` / `DEVICE_AUTH_SECRET` 一致时，可按客户端声明的 uid 签发 JWT（仅适合自建或受控测试分发；生产应关掉或换强密钥）  
+- **后续请求**：知识库 pull / push、好友、笔记分享只带 `Authorization: Bearer …`，服务端按 JWT 里的 `uid` 过滤；分享仅允许已存在的好友关系  
 - Cookie 主要用于登录鉴权与部分 B 站写操作；日常同步凭据是 JWT，并按 uid 分文件存放  
 
 ### 本机通信边界
 
 - 桌面 ↔ 扩展的桥只监听 **`127.0.0.1`**，默认不对外网暴露  
-- 敏感能力（笔记读写、同步、Skills）都挂在「当前绑定账号 + 门禁」之后，而不是裸接口任意访问  
+- 敏感能力（笔记读写、同步、Skills、好友）都挂在「当前绑定账号 + 门禁」之后，而不是裸接口任意访问  
 
 ### 使用与部署上建议自查
 
 - 生产环境务必设置强随机 **`JWT_SECRET`**，不要用示例默认值  
+- 生产环境更换 **`DEVICE_AUTH_SECRET` / `CLOUD_DEVICE_SECRET`**，勿长期使用仓库示例密钥  
 - 云 API 前面建议 Nginx / HTTPS，并收紧监听地址（勿长期把调试用的 `0.0.0.0` 直接暴露公网）  
 - 本地库与 Cookie 仍落在本机磁盘；请保护好自己的用户账号与系统登录态（本项目不做全盘加密）  
 
