@@ -71,7 +71,8 @@ async function verifyBiliCookie(cookieHeader) {
     };
   }
 
-  return { ok: true, uid: mid };
+  const uname = String(data?.data?.uname || '').trim().slice(0, 64) || null;
+  return { ok: true, uid: mid, uname };
 }
 
 function signToken(uid) {
@@ -105,15 +106,18 @@ function authMiddleware(req, res, next) {
   }
 }
 
-async function upsertUserLogin(uid) {
+async function upsertUserLogin(uid, uname = null) {
   const now = Date.now();
+  const name = String(uname || '').trim().slice(0, 64) || null;
   await query(
     `
-    INSERT INTO users (uid, created_at, last_login_at)
-    VALUES (:uid, :now, :now)
-    ON DUPLICATE KEY UPDATE last_login_at = VALUES(last_login_at)
+    INSERT INTO users (uid, created_at, last_login_at, uname)
+    VALUES (:uid, :now, :now, :uname)
+    ON DUPLICATE KEY UPDATE
+      last_login_at = VALUES(last_login_at),
+      uname = COALESCE(VALUES(uname), users.uname)
   `,
-    { uid, now }
+    { uid, now, uname: name }
   );
   await query(
     `
@@ -132,9 +136,9 @@ async function handleAuthBili(req, res) {
     res.status(401).json({ ok: false, ...verified });
     return;
   }
-  await upsertUserLogin(verified.uid);
+  await upsertUserLogin(verified.uid, verified.uname);
   const session = signToken(verified.uid);
-  res.json({ ok: true, ...session });
+  res.json({ ok: true, ...session, uname: verified.uname || null });
 }
 
 module.exports = {

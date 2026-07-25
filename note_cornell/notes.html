@@ -22,10 +22,18 @@
         <p class="notes-status" id="notes-status">手写会实时保存…</p>
       </div>
       <div class="notes-bar-actions">
+        <button type="button" class="notes-organize" id="notes-share">传给好友</button>
         <button type="button" class="notes-organize" id="notes-organize">一键整理</button>
         <button type="button" class="notes-close" id="notes-close" aria-label="关闭">×</button>
       </div>
     </header>
+
+    <div class="notes-share-panel" id="notes-share-panel" hidden>
+      <p class="notes-share-title">选择好友发送当前笔记</p>
+      <ul class="notes-share-list" id="notes-share-list"></ul>
+      <p class="notes-share-empty" id="notes-share-empty" hidden>还没有好友，请先右键宠物加好友</p>
+      <button type="button" class="notes-share-cancel" id="notes-share-cancel">取消</button>
+    </div>
 
     <div class="notes-hint" id="notes-hint">
       以你写的为主，改动实时入库。「一键整理」只在文末增补 AI 区块，不改你的原文；字幕按已看进度整段参考。可拖入截图，支持 LaTeX 与代码块。

@@ -11,7 +11,9 @@
     "test": "node scripts/verify-sync-local.js",
     "pack:ext": "node scripts/pack-extension.js",
     "pack:app": "node scripts/pack-desktop.js",
+    "pack:win": "node scripts/pack-desktop.js --win",
     "pack": "npm run pack:ext && npm run pack:app",
+    "pack:all": "npm run pack:ext && npm run pack:app && npm run pack:win",
     "cloud-api": "npm --prefix cloud-api start",
     "cloud-api:install": "npm --prefix cloud-api install"
   },

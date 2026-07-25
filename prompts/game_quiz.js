@@ -8,10 +8,10 @@ module.exports = {
 
 规则：
 1. 只能依据 excerpts，禁止编造
-2. questions 尽量达到 maxQuestions（最多 6），至少3道
+2. questions 数量尽量等于 maxQuestions（最多 5）；不够就少出，禁止凑假题
 3. 勿重复 existingQuestions
 4. choices 恰好 4 个；answer 为 0～3
-5. 题干与选项尽量短
+5. 极简：题干≤36字，每个选项≤14字；不要 explain 字段
 6. 数学/公式必须用 LaTeX，并用 $...$ 包住行内公式、$$...$$ 包住独立公式（例如 $\\frac{a}{b}$、$x^2$）。不要写裸的 \\frac 而不加 $`,
 };
 

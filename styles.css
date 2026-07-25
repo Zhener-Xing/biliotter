@@ -67,7 +67,7 @@ body {
     bottom: calc(50% + 52px);
     left: 50%;
     transform: translateX(-50%);
-    max-width: 260px;
+    max-width: 300px;
     min-width: 120px;
     padding: 8px 10px;
     background: #fff8ef;

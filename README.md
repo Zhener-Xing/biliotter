@@ -296,18 +296,29 @@ npm run pack
 | 产物 | 用途 |
 |------|------|
 | `bili-pet-bridge.zip` | 解压后用 Chrome/Edge「加载已解压的扩展程序」 |
-| `BiliOtter-<platform>-<arch>/` | 可直接运行的桌宠目录（macOS 内含 `BiliOtter.app`） |
+| `BiliOtter-<platform>-<arch>/` | 当前系统可运行的桌宠目录（macOS 含 `BiliOtter.app`） |
+| `BiliOtter-win32-x64.zip` | **Windows 分发包**（内含 `BiliOtter.exe`，需 `npm run pack:win`） |
+
+**Windows 包（可在 Mac 上交叉打包）：**
+
+```bash
+npm run pack:win
+# 或镜像加速（国内）：
+# ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm run pack:win
+```
+
+产物：`dist/BiliOtter-win32-x64.zip` → 解压后运行 `BiliOtter.exe`。
 
 **收件人三步：**
 
-1. 打开桌宠（macOS：运行 `BiliOtter.app`；Windows：运行目录里的 `BiliOtter.exe`）
+1. 打开桌宠（macOS：`BiliOtter.app`；Windows：解压 zip 后运行 `BiliOtter.exe`）
 2. 解压 `bili-pet-bridge.zip` → 浏览器扩展指向该文件夹  
-   （桌宠包内也有一份：macOS 多为 `BiliOtter.app/Contents/Resources/bili-pet-bridge`）
+   （桌宠包内也有一份：macOS 多为 `BiliOtter.app/Contents/Resources/bili-pet-bridge`；Windows 在 `resources/bili-pet-bridge`）
 3. 编辑桌宠数据目录里的 `.env`，填入 `LLM_API_KEY`（首次启动会从示例复制一份）  
    - macOS：`~/Library/Application Support/BiliOtter/.env`  
    - Windows：`%APPDATA%\BiliOtter\.env`
 
-只打扩展：`npm run pack:ext`。只打桌宠：`npm run pack:app`。
+只打扩展：`npm run pack:ext`。只打本机桌宠：`npm run pack:app`。扩展 + 本机 + Windows：`npm run pack:all`。
 
 开发时仍用 `npm start`；运行时数据仍写在仓库根目录。只有**打包后的应用**才写入系统 userData。
 

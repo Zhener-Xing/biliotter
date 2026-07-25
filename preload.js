@@ -19,6 +19,42 @@ contextBridge.exposeInMainWorld('biliPet', {
   openChatPage() {
     return ipcRenderer.invoke('pet:openChatPage');
   },
+  openFriendsPage() {
+    return ipcRenderer.invoke('pet:openFriendsPage');
+  },
+  friendsList() {
+    return ipcRenderer.invoke('pet:friendsList');
+  },
+  friendsGetInvite() {
+    return ipcRenderer.invoke('pet:friendsGetInvite');
+  },
+  friendsCreateInvite(pin, ttlMs) {
+    return ipcRenderer.invoke('pet:friendsCreateInvite', { pin, ttlMs });
+  },
+  friendsCancelInvite() {
+    return ipcRenderer.invoke('pet:friendsCancelInvite');
+  },
+  friendsJoin(pin) {
+    return ipcRenderer.invoke('pet:friendsJoin', { pin });
+  },
+  friendsRemove(uid) {
+    return ipcRenderer.invoke('pet:friendsRemove', { uid });
+  },
+  friendsPet(uid) {
+    return ipcRenderer.invoke('pet:friendsPet', { uid });
+  },
+  friendsNoteShare(toUid, bvid) {
+    return ipcRenderer.invoke('pet:friendsNoteShare', { toUid, bvid });
+  },
+  friendsNoteInbox() {
+    return ipcRenderer.invoke('pet:friendsNoteInbox');
+  },
+  friendsNoteAccept(id) {
+    return ipcRenderer.invoke('pet:friendsNoteAccept', { id });
+  },
+  friendsNoteReject(id) {
+    return ipcRenderer.invoke('pet:friendsNoteReject', { id });
+  },
   goHome(opts) {
     return ipcRenderer.invoke('pet:goHome', opts || {});
   },

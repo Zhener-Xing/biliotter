@@ -9,6 +9,11 @@ const editorEl = document.getElementById('notes-editor');
 const previewEl = document.getElementById('notes-preview');
 const sheetEl = document.getElementById('notes-sheet');
 const organizeBtn = document.getElementById('notes-organize');
+const shareBtn = document.getElementById('notes-share');
+const sharePanel = document.getElementById('notes-share-panel');
+const shareList = document.getElementById('notes-share-list');
+const shareEmpty = document.getElementById('notes-share-empty');
+const shareCancel = document.getElementById('notes-share-cancel');
 
 let currentBvid = null;
 let currentTitle = '';
@@ -505,6 +510,67 @@ function handleEvent(payload) {
 
 organizeBtn?.addEventListener('click', () => {
   void runOrganize();
+});
+
+function hideSharePanel() {
+  if (sharePanel) sharePanel.hidden = true;
+}
+
+async function openSharePanel() {
+  if (!currentBvid) {
+    setStatus('尚无视频笔记，无法传给好友');
+    return;
+  }
+  await flushSave();
+  const body = String(editorEl?.value || '').trim();
+  if (!body) {
+    setStatus('笔记是空的，写点内容再传');
+    return;
+  }
+  const res = await window.biliPet?.friendsList?.();
+  if (!res?.ok) {
+    setStatus(`无法加载好友：${res?.error || '请先登录云端'}`);
+    return;
+  }
+  const friends = Array.isArray(res.friends) ? res.friends : [];
+  if (shareList) shareList.innerHTML = '';
+  if (shareEmpty) shareEmpty.hidden = friends.length > 0;
+  for (const f of friends) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = f.uname || `UID ${f.uid}`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '发送';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      setStatus(`正在传给「${name.textContent}」…`);
+      const r = await window.biliPet?.friendsNoteShare?.(f.uid, currentBvid);
+      if (r?.ok) {
+        setStatus(`已传给「${name.textContent}」，等待对方接收`);
+        hideSharePanel();
+      } else if (r?.error === 'already_sent') {
+        setStatus('这篇笔记已经传给过对方，不能再发');
+        btn.disabled = false;
+      } else {
+        setStatus(`发送失败：${r?.error || 'unknown'}`);
+        btn.disabled = false;
+      }
+    });
+    li.appendChild(name);
+    li.appendChild(btn);
+    shareList?.appendChild(li);
+  }
+  if (sharePanel) sharePanel.hidden = false;
+}
+
+shareBtn?.addEventListener('click', () => {
+  void openSharePanel();
+});
+
+shareCancel?.addEventListener('click', () => {
+  hideSharePanel();
 });
 
 editorEl?.addEventListener('input', () => {

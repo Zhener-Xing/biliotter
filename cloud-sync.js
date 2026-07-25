@@ -68,9 +68,10 @@ function readTokenFile(filePath) {
     const token = String(raw.token || '').trim();
     const uid = String(raw.uid || '').trim();
     const expiresAt = Number(raw.expiresAt) || 0;
+    const uname = String(raw.uname || '').trim() || null;
     if (!token || !uid) return null;
     if (expiresAt && expiresAt < Date.now() - 5_000) return null;
-    return { token, uid, expiresAt };
+    return { token, uid, expiresAt, uname };
   } catch {
     return null;
   }
@@ -81,6 +82,7 @@ function writeTokenFile(filePath, session) {
     token: String(session?.token || ''),
     uid: String(session?.uid || ''),
     expiresAt: Number(session?.expiresAt) || 0,
+    uname: String(session?.uname || '').trim() || null,
     savedAt: Date.now(),
   };
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -263,7 +265,7 @@ async function authenticateWithCookie(cookieHeader) {
     }
     saveToken(data);
     emitSyncState('authenticated', { uid: data.uid });
-    return { ok: true, uid: data.uid, expiresAt: data.expiresAt };
+    return { ok: true, uid: data.uid, expiresAt: data.expiresAt, uname: data.uname || null };
   } catch (err) {
     emitSyncState('auth_error', { error: err.message || String(err) });
     return { ok: false, error: err.message || String(err) };
@@ -880,4 +882,6 @@ module.exports = {
   scheduleFirstPullRetry,
   sweepOrphanLocalStores,
   runFirstPullGate,
+  apiFetch,
+  apiBase,
 };

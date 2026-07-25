@@ -80,6 +80,7 @@ const GATE_MESSAGES = {
   not_logged_in: '云端鉴权失败，请刷新 B 站登录后重试',
   pull_timeout: '云端同步超时，正在重试…',
   pull_error: '云端同步失败，正在重试…',
+  cloud_disabled: '未配置云端，无法使用好友功能',
 };
 
 function showPetBubble(text, ms = BUBBLE_MS) {
@@ -301,6 +302,13 @@ async function goHome() {
   }
 }
 
+async function openFriendsPage() {
+  const result = await window.biliPet?.openFriendsPage?.();
+  if (result && result.ok === false) {
+    showPetBubble(gateBubbleText(result.error, result.message));
+  }
+}
+
 function handlePetClick() {
   // 切号/登录同步中：跳舞占住交互，避免打开旧账号知识库
   if (syncBuffering || gameDance) return;
@@ -496,6 +504,22 @@ function handleEvent(payload) {
       stopGameDance();
       break;
 
+    case 'friend_pet': {
+      const msg = String(payload.message || '').trim();
+      if (msg) showPetBubble(msg, 6500);
+      playPointOnce();
+      petSprite?.classList.add('pet-alert');
+      setTimeout(() => petSprite?.classList.remove('pet-alert'), 1200);
+      break;
+    }
+
+    case 'friend_note_offer': {
+      const msg = String(payload.message || '').trim();
+      if (msg) showPetBubble(msg, 7000);
+      playPointOnce();
+      break;
+    }
+
     default:
       break;
   }
@@ -554,6 +578,12 @@ petSprite?.addEventListener('pointerup', (e) => {
 
 petSprite?.addEventListener('pointercancel', () => {
   dragState = null;
+});
+
+petSprite?.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  openFriendsPage();
 });
 
 function playSfx(src) {

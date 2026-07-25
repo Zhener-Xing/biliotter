@@ -21,6 +21,7 @@ async function chatCompletion({
   max_tokens = 120,
   timeoutMs,
   jsonMode = false,
+  temperature,
   _attempt = 0,
 } = {}) {
   const apiKey = String(process.env.LLM_API_KEY || '').trim();
@@ -30,6 +31,13 @@ async function chatCompletion({
   );
   const model = String(process.env.LLM_MODEL || 'gpt-4o-mini').trim();
   const waitMs = timeoutMs ?? envInt('LLM_TIMEOUT_MS', 20000);
+  // JSON 任务用更低温度：少跑偏、少重试，整体更快
+  const temp =
+    Number.isFinite(Number(temperature))
+      ? Number(temperature)
+      : jsonMode
+        ? 0.28
+        : 0.6;
 
   if (!apiKey) {
     throw new Error('缺少 LLM_API_KEY（请复制 .env.example 为 .env 并填写）');
@@ -41,7 +49,7 @@ async function chatCompletion({
   try {
     const body = {
       model,
-      temperature: 0.6,
+      temperature: temp,
       max_tokens,
       messages,
     };
@@ -69,18 +77,20 @@ async function chatCompletion({
           max_tokens,
           timeoutMs: waitMs,
           jsonMode: false,
+          temperature: temp,
           _attempt,
         });
       }
       // 限流/过载：短暂退避后重试一次
       if (_attempt < 1 && (res.status === 429 || res.status >= 500)) {
         clearTimeout(timer);
-        await new Promise((r) => setTimeout(r, 400 + Math.random() * 400));
+        await new Promise((r) => setTimeout(r, 180 + Math.random() * 220));
         return chatCompletion({
           messages,
           max_tokens,
           timeoutMs: waitMs,
           jsonMode,
+          temperature: temp,
           _attempt: _attempt + 1,
         });
       }
@@ -102,12 +112,13 @@ async function chatCompletion({
       // 空内容常见于并发过载/代理抖动：重试一次
       if (_attempt < 1) {
         clearTimeout(timer);
-        await new Promise((r) => setTimeout(r, 350 + Math.random() * 350));
+        await new Promise((r) => setTimeout(r, 160 + Math.random() * 200));
         return chatCompletion({
           messages,
           max_tokens,
           timeoutMs: waitMs,
           jsonMode,
+          temperature: temp,
           _attempt: _attempt + 1,
         });
       }
@@ -152,6 +163,7 @@ async function completeTask(taskId, userContent, opts = {}) {
     max_tokens: opts.max_tokens ?? 1200,
     timeoutMs: opts.timeoutMs,
     jsonMode: Boolean(opts.jsonMode),
+    temperature: opts.temperature,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content },
@@ -273,13 +285,18 @@ function parseCollabJson(raw, userBodyMd = '') {
   };
 }
 
-const MAX_ORGANIZE_TRANSCRIPT_CHARS = 12000;
+/** 首次整理字幕上限（原 12k，输入 token 是整理慢的主因之一） */
+const MAX_ORGANIZE_TRANSCRIPT_CHARS = 6000;
+/** 增量整理：只送新增/尾段 */
+const MAX_ORGANIZE_DELTA_CHARS = 4200;
+const ORGANIZE_DELTA_OVERLAP = 240;
 
-function pickTranscriptText(payload = {}) {
+function pickTranscriptText(payload = {}, maxChars = MAX_ORGANIZE_TRANSCRIPT_CHARS) {
   const full = String(payload.fullSubtitleText || '').trim();
   const live = String(payload.transcriptText || '').trim();
   const t = Number(payload.modelInput?.playback?.t ?? payload.currentTime ?? 0);
   const duration = Number(payload.modelInput?.video?.duration || payload.duration || 0);
+  const cap = Math.max(400, Number(maxChars) || MAX_ORGANIZE_TRANSCRIPT_CHARS);
 
   let text = '';
   if (full) {
@@ -296,13 +313,51 @@ function pickTranscriptText(payload = {}) {
   }
 
   if (!text) return '';
-  if (text.length <= MAX_ORGANIZE_TRANSCRIPT_CHARS) return text;
-  return text.slice(0, MAX_ORGANIZE_TRANSCRIPT_CHARS);
+  if (text.length <= cap) return text;
+  return text.slice(0, cap);
 }
 
-function buildNotesUserPayload(payload) {
+/**
+ * 有 previousAiMd 时优先送字幕增量，显著缩短二次整理延迟。
+ * @returns {{ transcriptText: string, transcriptMode: 'full' | 'delta', watchedLen: number }}
+ */
+function pickOrganizeTranscript(payload = {}, { previousAiMd = '', prevWatchedLen = 0 } = {}) {
+  // 先取「已看到」的未截断进度文本，再按模式裁切
+  const watched = pickTranscriptText(payload, 100_000);
+  const watchedLen = watched.length;
+  const hasPrevAi = Boolean(String(previousAiMd || '').trim());
+
+  if (!hasPrevAi || prevWatchedLen <= 0) {
+    return {
+      transcriptText: watched.slice(0, MAX_ORGANIZE_TRANSCRIPT_CHARS),
+      transcriptMode: 'full',
+      watchedLen,
+    };
+  }
+
+  const start = Math.max(0, prevWatchedLen - ORGANIZE_DELTA_OVERLAP);
+  let delta = watched.slice(start);
+  if (!delta.trim()) {
+    // 进度几乎没动：短尾段供润色，避免再塞整篇
+    delta = watched.slice(-Math.min(1800, MAX_ORGANIZE_DELTA_CHARS));
+  }
+  if (delta.length > MAX_ORGANIZE_DELTA_CHARS) {
+    delta = delta.slice(-MAX_ORGANIZE_DELTA_CHARS);
+  }
+  return {
+    transcriptText: delta,
+    transcriptMode: 'delta',
+    watchedLen,
+  };
+}
+
+function buildNotesUserPayload(payload, transcriptOverride = null) {
   const modelInput = payload.modelInput || null;
   const video = modelInput?.video || {};
+  const transcriptText =
+    transcriptOverride != null
+      ? String(transcriptOverride)
+      : pickTranscriptText(payload);
 
   return {
     video: {
@@ -317,7 +372,7 @@ function buildNotesUserPayload(payload) {
       paused: Boolean(payload.paused),
       reason: payload.reason || null,
     },
-    transcriptText: pickTranscriptText(payload),
+    transcriptText,
     contextText:
       payload.contextText ||
       modelInput?.context?.text ||
@@ -326,25 +381,36 @@ function buildNotesUserPayload(payload) {
   };
 }
 
-function buildCollabUserPayload(payload, userBodyMd, previousAiMd = '') {
+function buildCollabUserPayload(
+  payload,
+  userBodyMd,
+  previousAiMd = '',
+  { transcriptText, transcriptMode } = {}
+) {
+  const base = buildNotesUserPayload(payload, transcriptText);
+  const mode = transcriptMode === 'delta' ? 'delta' : 'full';
   return {
-    ...buildNotesUserPayload(payload),
+    ...base,
+    transcriptMode: mode,
     instruction:
-      '只生成/更新 AI 补充（ai_md）。不要改写 userBodyMd；结合片头到当前进度的完整已看字幕，在 previousAiMd 基础上增补，禁止只根据最近一段字幕整页重写。',
+      mode === 'delta'
+        ? '只更新 ai_md：结合 previousAiMd 与增量字幕增补，勿整页重写，勿改 userBodyMd。'
+        : '只生成/更新 ai_md：依据已看字幕，勿改 userBodyMd；有 previousAiMd 则增补而非重写。',
     userBodyMd: String(userBodyMd || ''),
     previousAiMd: String(previousAiMd || ''),
-    用户正文: String(userBodyMd || ''),
-    上次AI补充: String(previousAiMd || ''),
   };
 }
 
 function createNotesOrganizer(hooks = {}) {
   const enabled = envFlag('LLM_ENABLED', false);
   const notesTimeout = envInt('LLM_NOTES_TIMEOUT_MS', 60000);
+  const notesMaxTokens = envInt('LLM_NOTES_MAX_TOKENS', 1600);
   let inflight = false;
   let previousNotes = null;
   let previousBodyMd = '';
   let currentBvid = null;
+  /** @type {Map<string, number>} bvid → 上次整理时已看字幕长度 */
+  const organizeWatchedLen = new Map();
 
   function bindNotes(bvid) {
     const key = String(bvid || '').trim() || null;
@@ -397,15 +463,17 @@ function createNotesOrganizer(hooks = {}) {
     bindNotes(key);
     const sourceBody = bodyMd != null ? String(bodyMd) : previousBodyMd || '';
     const { userBodyMd, previousAiMd } = splitOrganizeBody(sourceBody);
-    const transcript = pickTranscriptText(ev);
+    const prevLen = organizeWatchedLen.get(key) || 0;
+    const picked = pickOrganizeTranscript(ev, {
+      previousAiMd,
+      prevWatchedLen: prevLen,
+    });
+    const transcript = picked.transcriptText;
     const context =
       ev.contextText ||
       ev.modelInput?.context?.text ||
       ev.currentSubtitle?.content ||
       '';
-    // #region agent log
-    fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'F',location:'llm.js:organizeOnce',message:'organize content check',data:{bvid:key,kind:String(ev.kind||''),userBodyLen:userBodyMd.trim().length,prevAiLen:previousAiMd.trim().length,transcriptLen:String(transcript||'').length,contextLen:String(context||'').trim().length,fullSubLen:String(ev.fullSubtitleText||'').trim().length,rawTranscriptLen:String(ev.transcriptText||'').trim().length,hasModelInput:Boolean(ev.modelInput),subtitleStatus:ev.subtitleStatus||null,sourceBodyLen:String(sourceBody||'').length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (!userBodyMd.trim() && !previousAiMd.trim() && !transcript && !context) {
       hooks.onStatus?.('没有可整理的内容');
       return { ok: false, error: 'empty' };
@@ -416,8 +484,16 @@ function createNotesOrganizer(hooks = {}) {
     try {
       const raw = await completeTask(
         'notes_collab',
-        buildCollabUserPayload(ev, userBodyMd, previousAiMd),
-        { max_tokens: 2500, timeoutMs: notesTimeout, jsonMode: true }
+        buildCollabUserPayload(ev, userBodyMd, previousAiMd, {
+          transcriptText: transcript,
+          transcriptMode: picked.transcriptMode,
+        }),
+        {
+          max_tokens: notesMaxTokens,
+          timeoutMs: notesTimeout,
+          jsonMode: true,
+          temperature: 0.25,
+        }
       );
       const collab = parseCollabJson(raw, userBodyMd);
       const nextAi = String(collab.aiMd || '').trim() || previousAiMd;
@@ -434,6 +510,9 @@ function createNotesOrganizer(hooks = {}) {
       previousBodyMd = doc?.bodyMd || mergedBody;
       previousNotes = doc?.notes || previousNotes;
       currentBvid = key;
+      if (picked.watchedLen > 0) {
+        organizeWatchedLen.set(key, picked.watchedLen);
+      }
       emitDoc(doc, {
         sessionId: ev.sessionId || null,
         bvid: key,

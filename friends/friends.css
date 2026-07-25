@@ -1,0 +1,262 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: "Press Start 2P", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", monospace;
+  color: #3b2a1f;
+  user-select: none;
+}
+
+.friends-window {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 4px solid #3b2a1f;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 3px,
+      rgba(59, 42, 31, 0.03) 3px,
+      rgba(59, 42, 31, 0.03) 4px
+    ),
+    linear-gradient(180deg, #f4ebe0 0%, #e7d7c4 100%);
+  box-shadow: 6px 6px 0 #3b2a1f;
+  -webkit-app-region: drag;
+  overflow: hidden;
+}
+
+.friends-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding-bottom: 10px;
+  border-bottom: 3px solid #3b2a1f;
+}
+
+.friends-kicker {
+  font-size: 8px;
+  line-height: 1.6;
+  color: #7a6352;
+  margin-bottom: 8px;
+}
+
+.friends-title {
+  font-size: 13px;
+  line-height: 1.5;
+  text-shadow: 2px 2px 0 rgba(176, 122, 69, 0.35);
+}
+
+.friends-close {
+  appearance: none;
+  border: 3px solid #3b2a1f;
+  background: #c9a27a;
+  color: #fff8f0;
+  width: 36px;
+  height: 36px;
+  border-radius: 0;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 3px 3px 0 #3b2a1f;
+  -webkit-app-region: no-drag;
+}
+
+.friends-close:hover {
+  background: #d4b08a;
+}
+
+.friends-status {
+  flex-shrink: 0;
+  font-size: 8px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 2px solid #3b2a1f;
+  background: #fff8ef;
+  -webkit-app-region: no-drag;
+}
+
+.friends-status[data-tone="error"] {
+  background: #f3d5c4;
+}
+
+.friends-status[data-tone="ok"] {
+  background: #dce8c8;
+}
+
+.friends-section {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.friends-list-section {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.friends-notes-section {
+  flex: 1;
+  min-height: 120px;
+  max-height: 42%;
+  overflow: hidden;
+  border-top: 3px solid #3b2a1f;
+  padding-top: 10px;
+}
+
+.friends-h2 {
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.friends-hint,
+.friends-meta,
+.friends-empty {
+  font-size: 8px;
+  line-height: 1.55;
+  color: #7a6352;
+}
+
+.friends-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.friends-input,
+.friends-select {
+  appearance: none;
+  border: 3px solid #3b2a1f;
+  background: #fff8ef;
+  color: #3b2a1f;
+  font: inherit;
+  font-size: 10px;
+  padding: 8px 10px;
+  min-width: 0;
+  box-shadow: 2px 2px 0 #3b2a1f;
+}
+
+.friends-input {
+  flex: 1;
+  letter-spacing: 0.2em;
+}
+
+.friends-select {
+  width: 118px;
+  flex-shrink: 0;
+}
+
+.friends-btn {
+  appearance: none;
+  border: 3px solid #3b2a1f;
+  background: #b07a45;
+  color: #fff8f0;
+  font: inherit;
+  font-size: 9px;
+  padding: 8px 12px;
+  cursor: pointer;
+  box-shadow: 3px 3px 0 #3b2a1f;
+  white-space: nowrap;
+}
+
+.friends-btn:hover {
+  background: #c48b52;
+}
+
+.friends-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.friends-btn-ghost {
+  background: #fff8ef;
+  color: #3b2a1f;
+  align-self: flex-start;
+}
+
+.friends-btn-ghost:hover {
+  background: #f0e4d4;
+}
+
+.friends-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.friends-list {
+  list-style: none;
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 2px;
+  min-height: 0;
+}
+
+.friend-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 3px solid #3b2a1f;
+  background: #fff8ef;
+  box-shadow: 3px 3px 0 rgba(59, 42, 31, 0.25);
+}
+
+.friend-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.friend-name {
+  font-size: 9px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-online {
+  font-size: 7px;
+  color: #5a7a3a;
+}
+
+.friend-online.is-off {
+  color: #8a6a5a;
+}
+
+.friend-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.friend-actions .friends-btn {
+  font-size: 8px;
+  padding: 6px 8px;
+}

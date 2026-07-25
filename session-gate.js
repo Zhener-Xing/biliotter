@@ -38,6 +38,8 @@ function gateMessage(error) {
       return '正在用 B 站登录态连接云端…';
     case 'waiting_cookie':
       return '请打开已登录的 bilibili.com，以便同步知识库';
+    case 'cloud_disabled':
+      return '未配置云端，无法使用好友功能';
     case 'syncing':
     case 'pull_timeout':
     case 'pull_error':

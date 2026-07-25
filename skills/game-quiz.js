@@ -9,23 +9,22 @@ const {
 
 const MAX_TOPIC_NOTES = 8;
 const MAX_QUESTIONS = 5;
-/** 首包题量：略多于 2，减少答完先到题后还在等补题的概率 */
+/** 首包题量 */
 const EARLY_READY = 3;
 const START_LIVES = 3;
-/** 答完已有题后等待补题：超过此时长则结束本局 */
-const WAIT_MORE_TIMEOUT_MS = 6000;
-/**
- * 出题语料：再压一档。
- * 旧版曾用 listChunksForBvids(limit:36, perBvid:6) + CORPUS_CHAR_LIMIT=10000，
- * 单 chunk ~450 字 → 轻松顶满万字；那是输入 token 延迟的主因。
- */
-const CORPUS_CHAR_LIMIT = 2600;
-const CORPUS_PER_NOTE = 520;
-const CORPUS_MAX_NOTES = 4;
-const CORPUS_MAX_BULLETS = 12;
+const CORPUS_CHAR_LIMIT = 1700;
+const CORPUS_PER_NOTE = 360;
+const CORPUS_MAX_NOTES = 3;
+const CORPUS_MAX_BULLETS = 8;
 /** 单题补全时更短 */
-const CORPUS_SLIM_LIMIT = 1400;
+const CORPUS_SLIM_LIMIT = 1100;
+/** 首包 3 题专用上限 */
+const CORPUS_FIRST_PACK_LIMIT = 1500;
+const GAME_SCOPE_TIMEOUT_MS = 12_000;
+const GAME_QUIZ_TIMEOUT_MS = 28_000;
 const BV_RE = /BV[\w]+/i;
+const AI_ORG_STRIP_RE =
+  /<!--\s*bili-pet:ai-organize:start\s*-->[\s\S]*?<!--\s*bili-pet:ai-organize:end\s*-->/gi;
 
 /** @type {(kind: string, payload?: object) => void} */
 let petNotifier = () => {};
@@ -76,8 +75,6 @@ function notifyPet(kind, payload = {}) {
  * }} */
 let session = blankSession();
 let backfillToken = 0;
-/** @type {ReturnType<typeof setTimeout> | null} */
-let waitMoreTimer = null;
 
 function blankSession() {
   return {
@@ -95,29 +92,12 @@ function blankSession() {
   };
 }
 
-function clearWaitMoreTimer() {
-  if (waitMoreTimer) {
-    clearTimeout(waitMoreTimer);
-    waitMoreTimer = null;
-  }
-}
-
-/** 进入「等补题」状态时启动；已有计时器则不重置，避免反复作答拖长时限。 */
-function armWaitMoreTimeout() {
-  if (waitMoreTimer) return;
-  waitMoreTimer = setTimeout(() => {
-    waitMoreTimer = null;
-    if (session.phase !== 'asking') return;
-    // 题已补到：不必结束
-    if (session.index < session.questions.length) return;
-
-    backfillToken += 1;
-    session.backfilling = false;
-    session.phase = 'ended';
-    session.endReason = 'wait_more_timeout';
-    notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
-    notifyPet('game_play_end');
-  }, WAIT_MORE_TIMEOUT_MS);
+/** 结束本局并取消后台补题（答完已有题即通关，不再干等补题）。 */
+function endRunAndCancelBackfill(reason = null) {
+  backfillToken += 1;
+  session.backfilling = false;
+  session.phase = 'ended';
+  session.endReason = reason;
 }
 
 function isActive() {
@@ -134,13 +114,11 @@ function isPlaying() {
 
 function resetSession() {
   backfillToken += 1;
-  clearWaitMoreTimer();
   session = blankSession();
 }
 
 function startAwaitingScope() {
   backfillToken += 1;
-  clearWaitMoreTimer();
   session = {
     ...blankSession(),
     phase: 'awaiting_scope',
@@ -590,16 +568,19 @@ function looksLikeTopicUtterance(q) {
 function formatGameCatalog() {
   const groups = listCourseGroups();
   if (!groups.length) return '（当前没有任何课程组）';
+  // 只送前 24 个组，文件夹名截断，减轻 game_scope 输入
   return groups
+    .slice(0, 24)
     .map((g, i) => {
       const detail = getCourseGroup(g.id);
       const folders = (detail?.folders || [])
         .map((f) => f.title)
-        .filter(Boolean);
+        .filter(Boolean)
+        .slice(0, 8);
       const folderPart = folders.length
-        ? `；文件夹：${folders.join('、')}`
+        ? `；夹：${folders.join('、')}`
         : '';
-      return `${i + 1}. 「${g.title}」${g.topic ? `（${g.topic}）` : ''} · ${g.itemCount || 0} 视频${folderPart}`;
+      return `${i + 1}.「${g.title}」${g.topic ? `(${String(g.topic).slice(0, 24)})` : ''}·${g.itemCount || 0}v${folderPart}`;
     })
     .join('\n');
 }
@@ -729,28 +710,28 @@ function applyLlmScopeIntent(intent, videoMeta = {}) {
 }
 
 async function parseScopeWithLlm(question, videoMeta = {}) {
-  const groups = listCourseGroups();
+  const groups = listCourseGroups().slice(0, 24);
   const payload = {
-    userMessage: String(question || '').trim(),
+    userMessage: String(question || '').trim().slice(0, 240),
     currentVideo: {
       bvid: videoMeta.bvid || null,
-      title: videoMeta.title || null,
+      title: videoMeta.title ? String(videoMeta.title).slice(0, 80) : null,
     },
     catalogText: formatGameCatalog(),
+    // 精简字段，避免与 catalogText 重复膨胀
     existingCourseGroups: groups.map((g) => ({
-      id: g.id,
       title: g.title,
-      topic: g.topic,
-      itemCount: g.itemCount,
-      folderCount: g.folderCount,
+      topic: g.topic ? String(g.topic).slice(0, 32) : '',
+      folders: g.folderCount || 0,
     })),
   };
 
   try {
     const raw = await completeTask('game_scope', payload, {
-      max_tokens: 400,
-      timeoutMs: 20000,
+      max_tokens: 220,
+      timeoutMs: GAME_SCOPE_TIMEOUT_MS,
       jsonMode: true,
+      temperature: 0.2,
     });
     return parseJsonObject(raw);
   } catch (err) {
@@ -781,15 +762,8 @@ async function resolveScope(question, videoMeta = {}) {
   if (byBvid) return byBvid;
 
   const explicitCourse = /课程组|文件夹/.test(q);
-  // 口语主题（「考个网瘾相关的吧」）优先走主题，避免被误拆成文件夹
-  if (!explicitCourse && looksLikeTopicUtterance(q)) {
-    const intent = await parseScopeWithLlm(q, videoMeta);
-    const fromLlm = intent ? applyLlmScopeIntent(intent, videoMeta) : null;
-    if (fromLlm) return fromLlm;
-    return resolveTopic(q);
-  }
 
-  // 启发式课程组/文件夹：仅在明确提到结构词，或已有待选列表时
+  // 启发式课程组/文件夹优先（零 LLM）
   const course = resolveCourseScope(q);
   if (
     course &&
@@ -799,6 +773,23 @@ async function resolveScope(question, videoMeta = {}) {
       session.pendingChoices?.length)
   ) {
     return course;
+  }
+
+  // 口语主题：先本地检索，命中则跳过 game_scope
+  if (!explicitCourse && looksLikeTopicUtterance(q)) {
+    const topicHit = resolveTopic(q);
+    if (topicHit?.scopeReady) return topicHit;
+    const intent = await parseScopeWithLlm(q, videoMeta);
+    const fromLlm = intent ? applyLlmScopeIntent(intent, videoMeta) : null;
+    if (fromLlm) return fromLlm;
+    return topicHit;
+  }
+
+  // 清洗后的关键词能搜到笔记 → 仍不调用 scope LLM
+  const cleaned = cleanTopicQuery(q);
+  if (cleaned && cleaned.length >= 2 && !explicitCourse) {
+    const topicHit = resolveTopic(cleaned);
+    if (topicHit?.scopeReady) return topicHit;
   }
 
   const intent = await parseScopeWithLlm(q, videoMeta);
@@ -822,10 +813,6 @@ function extractMdSection(bodyMd, heading) {
   return (next >= 0 ? rest.slice(0, next) : rest).trim();
 }
 
-/**
- * 出题只用笔记正文里的高密度部分：优先康奈尔「要点 + 总结」，
- * 不再塞 note_chunks 长摘录（旧版最多 ~10k）。
- */
 function noteQuizExcerpt(doc) {
   const structured = doc?.notes;
   if (
@@ -839,11 +826,11 @@ function noteQuizExcerpt(doc) {
       if (t) lines.push(`- ${t}`);
     }
     if (structured.summary) {
-      const s = String(structured.summary).trim().slice(0, 280);
+      const s = String(structured.summary).trim().slice(0, 180);
       if (s) lines.push(`总结：${s}`);
     }
     if (!lines.length && structured.cues?.length) {
-      for (const c of structured.cues.slice(0, 8)) {
+      for (const c of structured.cues.slice(0, 6)) {
         const t = String(c || '').trim();
         if (t) lines.push(`- ${t}`);
       }
@@ -851,7 +838,10 @@ function noteQuizExcerpt(doc) {
     return lines.join('\n').trim();
   }
 
-  const body = String(doc?.bodyMd || '').trim();
+  const body = String(doc?.bodyMd || '')
+    .replace(AI_ORG_STRIP_RE, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .trim();
   if (!body) return '';
   const points = extractMdSection(body, '要点');
   const summary = extractMdSection(body, '总结');
@@ -983,16 +973,6 @@ function publicGameUi(extra = {}) {
 
   if (session.phase === 'ended') {
     const ready = session.questions.length;
-    if (session.endReason === 'wait_more_timeout') {
-      return {
-        ...base,
-        q: `补题超过 6 秒，本局结束\n答对 ${session.correctCount}/${ready}`,
-        choices: ['—', '—', '—', '—'],
-        disabled: true,
-        won: false,
-        timedOut: true,
-      };
-    }
     const won = session.lives > 0 && session.index >= ready && ready > 0;
     return {
       ...base,
@@ -1002,17 +982,6 @@ function publicGameUi(extra = {}) {
       choices: ['—', '—', '—', '—'],
       disabled: true,
       won,
-    };
-  }
-
-  if (session.phase === 'asking' && extra.waitingMore) {
-    return {
-      ...base,
-      mode: 'asking',
-      q: `第 ${session.index + 1} 题准备中…\n后台补题中（超过 6 秒将结束）`,
-      choices: ['…', '…', '…', '…'],
-      disabled: true,
-      waitingMore: true,
     };
   }
 
@@ -1036,15 +1005,30 @@ function publicGameUi(extra = {}) {
 
 async function requestQuestions({ maxQuestions, corpus, existing = [] }) {
   const n = Math.max(1, Math.min(Number(maxQuestions) || 1, MAX_QUESTIONS));
-  const maxTokens = n <= 1 ? 700 : n <= 2 ? 1000 : 1600;
-  const excerpts =
-    n <= 1 && session.scope
-      ? buildCorpus(session.scope, {
+  // 短选项 JSON：3 题约千 token 足够，过高只拖长生成
+  const maxTokens = n <= 1 ? 480 : n <= 2 ? 780 : 1100;
+  let excerpts = corpus;
+  if (session.scope) {
+    if (n <= 1) {
+      excerpts =
+        buildCorpus(session.scope, {
           charLimit: CORPUS_SLIM_LIMIT,
-          maxNotes: 3,
+          maxNotes: 2,
           noteOffset: session.questions.length,
-        }) || corpus
-      : corpus;
+        }) || corpus;
+    } else if (n >= EARLY_READY) {
+      excerpts =
+        buildCorpus(session.scope, {
+          charLimit: CORPUS_FIRST_PACK_LIMIT,
+          maxNotes: CORPUS_MAX_NOTES,
+        }) || corpus;
+    }
+  }
+
+  const existingQuestions = existing
+    .map((item) => item.q)
+    .filter(Boolean)
+    .slice(0, 8);
 
   let lastErr = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1055,9 +1039,14 @@ async function requestQuestions({ maxQuestions, corpus, existing = [] }) {
           maxQuestions: n,
           scope: session.scope?.label || '',
           excerpts,
-          existingQuestions: existing.map((item) => item.q),
+          existingQuestions,
         },
-        { max_tokens: maxTokens, timeoutMs: 35000, jsonMode: true }
+        {
+          max_tokens: maxTokens,
+          timeoutMs: GAME_QUIZ_TIMEOUT_MS,
+          jsonMode: true,
+          temperature: 0.3,
+        }
       );
       const parsed = parseJsonObject(raw);
       const list = normalizeQuestions(parsed?.questions).slice(0, n);
@@ -1067,7 +1056,7 @@ async function requestQuestions({ maxQuestions, corpus, existing = [] }) {
       lastErr = err;
     }
     if (attempt === 0) {
-      await new Promise((r) => setTimeout(r, 300 + Math.random() * 300));
+      await new Promise((r) => setTimeout(r, 120 + Math.random() * 180));
     }
   }
   throw lastErr || new Error('出题失败');
@@ -1086,20 +1075,20 @@ function appendUniqueQuestions(list) {
   return added;
 }
 
-/**
- * 逐题补全：每出 1 题就刷新 UI，避免整批 3 题一次 LLM 调用卡住「准备中」。
- */
 async function backfillQuestions(corpus, token) {
-  const finish = (endedByEmpty) => {
+  const finish = () => {
     if (token !== backfillToken) return;
     session.backfilling = false;
-    clearWaitMoreTimer();
+    // 若用户已答完全部已有题（竞态），直接通关，不进入等待
     if (
-      endedByEmpty &&
       session.phase === 'asking' &&
-      session.index >= session.questions.length
+      session.index >= session.questions.length &&
+      session.lives > 0
     ) {
-      session.phase = 'ended';
+      endRunAndCancelBackfill(null);
+      notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
+      notifyPet('game_play_end');
+      return;
     }
     notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
   };
@@ -1109,7 +1098,8 @@ async function backfillQuestions(corpus, token) {
     let failRounds = 0;
     while (session.questions.length < MAX_QUESTIONS) {
       if (token !== backfillToken) return;
-      if (session.phase !== 'asking' && session.phase !== 'ended') return;
+      // 只在答题中补题；已结束则停
+      if (session.phase !== 'asking') return;
 
       const need = MAX_QUESTIONS - session.questions.length;
       if (need <= 0) break;
@@ -1129,23 +1119,22 @@ async function backfillQuestions(corpus, token) {
         continue;
       }
       if (token !== backfillToken) return;
-      if (session.phase !== 'asking' && session.phase !== 'ended') return;
+      if (session.phase !== 'asking') return;
 
       failRounds = 0;
       const added = appendUniqueQuestions(more);
       if (added > 0) {
         idleRounds = 0;
-        clearWaitMoreTimer();
         notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
       } else {
         idleRounds += 1;
         if (idleRounds >= 2) break;
       }
     }
-    finish(session.questions.length <= session.index);
+    finish();
   } catch (err) {
     console.warn('[bili-pet] game backfill failed:', err?.message || err);
-    finish(session.phase === 'asking' && session.index >= session.questions.length);
+    finish();
   }
 }
 
@@ -1169,7 +1158,10 @@ async function beginQuizFromScope() {
   session.targetTotal = MAX_QUESTIONS;
   notifyPet('game_generating');
 
-  const corpus = buildCorpus(session.scope);
+  const corpus = buildCorpus(session.scope, {
+    charLimit: CORPUS_FIRST_PACK_LIMIT,
+    maxNotes: CORPUS_MAX_NOTES,
+  });
   if (!corpus.trim()) {
     session.phase = 'awaiting_scope';
     notifyPet('game_generating_end');
@@ -1217,7 +1209,7 @@ async function beginQuizFromScope() {
       game: true,
       gameUi: publicGameUi(),
       message: session.backfilling
-        ? `开始答题：${session.scope.label}（先到 ${ready} 题，其余后台补全，3 条命）\n中途退出：⌘S+G。`
+        ? `开始答题：${session.scope.label}（先 ${ready} 题，答完前能补则继续，补不到即通关；3 条命）\n中途退出：⌘S+G。`
         : `开始答题：${session.scope.label}（共 ${ready} 题，3 条命）\n中途退出：⌘S+G。`,
     };
   } catch (err) {
@@ -1246,29 +1238,28 @@ function answerGame(choiceIndex) {
     return { ok: false, error: 'bad_choice', gameUi: publicGameUi() };
   }
 
-  const current = session.questions[session.index];
-  if (!current) {
-    if (session.backfilling) {
-      armWaitMoreTimeout();
-      return {
-        ok: true,
-        correct: false,
-        feedback: '',
-        gameUi: publicGameUi({ waitingMore: true }),
-        waitingMore: true,
-      };
-    }
-    session.phase = 'ended';
-    clearWaitMoreTimer();
-    const gameUi = publicGameUi();
+  const finishAsEnded = (correct, feedback) => {
+    const total = session.questions.length;
+    const won = session.lives > 0 && session.index >= total && total > 0;
+    const endMessage = won
+      ? `通关！答对 ${session.correctCount}/${total}。范围：${session.scope?.label || ''}`
+      : `GAME OVER。答对 ${session.correctCount}/${total}，命尽。`;
     return {
       ok: true,
-      correct: false,
-      feedback: '',
-      gameUi,
-      autoClose: false,
-      endMessage: '本局已结束。',
+      correct,
+      feedback: String(feedback || '').trim(),
+      gameUi: publicGameUi(),
+      autoClose: true,
+      endMessage,
+      won,
     };
+  };
+
+  const current = session.questions[session.index];
+  if (!current) {
+    // 已无下一题：不论是否还在补题，直接通关/结束，不再干等
+    endRunAndCancelBackfill(null);
+    return finishAsEnded(false, '');
   }
 
   const correct = idx === current.answer;
@@ -1285,48 +1276,22 @@ function answerGame(choiceIndex) {
   }
 
   if (!correct && session.lives <= 0) {
-    session.phase = 'ended';
-    clearWaitMoreTimer();
-  } else {
-    session.index += 1;
-    if (session.index >= session.questions.length) {
-      if (session.backfilling) {
-        armWaitMoreTimeout();
-        return {
-          ok: true,
-          correct,
-          feedback: feedback.trim(),
-          gameUi: publicGameUi({ waitingMore: true }),
-          waitingMore: true,
-        };
-      }
-      session.phase = 'ended';
-    }
+    endRunAndCancelBackfill(null);
+    return finishAsEnded(correct, feedback);
   }
 
-  if (session.phase !== 'ended') {
-    return {
-      ok: true,
-      correct,
-      feedback: feedback.trim(),
-      gameUi: publicGameUi(),
-    };
+  session.index += 1;
+  if (session.index >= session.questions.length) {
+    // 答完当前已有题：能补到的题会在答完前已经 append；此处不再等待补题
+    endRunAndCancelBackfill(null);
+    return finishAsEnded(correct, feedback);
   }
 
-  const total = session.questions.length;
-  const won = session.lives > 0 && session.index >= total && total > 0;
-  const endMessage = won
-    ? `通关！答对 ${session.correctCount}/${total}。范围：${session.scope?.label || ''}`
-    : `GAME OVER。答对 ${session.correctCount}/${total}，命尽。`;
-  // 前端展示结算后自动关页并 gameStop；此处不露宠物、不重置
   return {
     ok: true,
     correct,
     feedback: feedback.trim(),
     gameUi: publicGameUi(),
-    autoClose: true,
-    endMessage,
-    won,
   };
 }
 

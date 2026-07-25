@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>好友 · 摸獭</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="friends.css" />
+</head>
+<body>
+  <div class="friends-window" id="friends-root">
+    <header class="friends-bar">
+      <div class="friends-bar-text">
+        <p class="friends-kicker">BiliOtter · FRIENDS</p>
+        <h1 class="friends-title">好友与摸獭</h1>
+      </div>
+      <button type="button" class="friends-close" id="friends-close" aria-label="关闭">×</button>
+    </header>
+
+    <p class="friends-status" id="friends-status" hidden></p>
+
+    <section class="friends-section">
+      <h2 class="friends-h2">生成好友密钥</h2>
+      <p class="friends-hint">设置 4 位数字，好友在有效时间内输入即可加你</p>
+      <div class="friends-row">
+        <input
+          id="invite-pin"
+          class="friends-input"
+          type="text"
+          inputmode="numeric"
+          maxlength="4"
+          placeholder="1234"
+          autocomplete="off"
+        />
+        <select id="invite-ttl" class="friends-select" aria-label="有效时间">
+          <option value="300000" selected>5 分钟</option>
+          <option value="600000">10 分钟</option>
+          <option value="1800000">30 分钟</option>
+          <option value="3600000">60 分钟</option>
+        </select>
+        <button type="button" class="friends-btn" id="invite-create">生成</button>
+      </div>
+      <p class="friends-meta" id="invite-meta"></p>
+      <button type="button" class="friends-btn friends-btn-ghost" id="invite-cancel" hidden>取消密钥</button>
+    </section>
+
+    <section class="friends-section">
+      <h2 class="friends-h2">输入好友密钥</h2>
+      <div class="friends-row">
+        <input
+          id="join-pin"
+          class="friends-input"
+          type="text"
+          inputmode="numeric"
+          maxlength="4"
+          placeholder="对方的 4 位密钥"
+          autocomplete="off"
+        />
+        <button type="button" class="friends-btn" id="join-submit">加好友</button>
+      </div>
+    </section>
+
+    <section class="friends-section friends-list-section">
+      <div class="friends-list-head">
+        <h2 class="friends-h2">我的好友</h2>
+        <button type="button" class="friends-btn friends-btn-ghost" id="friends-refresh">刷新</button>
+      </div>
+      <ul class="friends-list" id="friends-list"></ul>
+      <p class="friends-empty" id="friends-empty" hidden>还没有好友。生成密钥或输入对方密钥吧。</p>
+    </section>
+
+    <section class="friends-section friends-notes-section">
+      <div class="friends-list-head">
+        <h2 class="friends-h2">收到的笔记</h2>
+      </div>
+      <ul class="friends-list" id="note-inbox-list"></ul>
+      <p class="friends-empty" id="note-inbox-empty" hidden>暂无待接收的笔记</p>
+    </section>
+  </div>
+  <script src="friends.js"></script>
+</body>
+</html>

@@ -25,3 +25,4 @@ assets/_preview/
 cloud-api/node_modules/
 cloud-api/.env
 dist/
+.electron-cache/

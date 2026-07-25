@@ -23,6 +23,7 @@ body {
   flex-direction: column;
   gap: 10px;
   padding: 14px;
+  position: relative;
   border: 4px solid #3b2a1f;
   background:
     repeating-linear-gradient(
@@ -104,6 +105,86 @@ body {
 .notes-organize:disabled {
   opacity: 0.55;
   cursor: wait;
+}
+
+.notes-share-panel {
+  position: absolute;
+  top: 72px;
+  right: 18px;
+  z-index: 20;
+  width: min(320px, calc(100% - 36px));
+  max-height: min(360px, calc(100% - 100px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 3px solid #3b2a1f;
+  background: #fff8ef;
+  box-shadow: 4px 4px 0 #3b2a1f;
+  -webkit-app-region: no-drag;
+  overflow: hidden;
+}
+
+.notes-share-panel[hidden] {
+  display: none !important;
+}
+
+.notes-share-title {
+  font-size: 8px;
+  line-height: 1.5;
+  color: #7a6352;
+}
+
+.notes-share-list {
+  list-style: none;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  flex: 1;
+}
+
+.notes-share-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 2px solid #3b2a1f;
+  background: #f4ebe0;
+}
+
+.notes-share-list .name {
+  font-size: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notes-share-list button,
+.notes-share-cancel {
+  appearance: none;
+  border: 2px solid #3b2a1f;
+  background: #b07a45;
+  color: #fff8f0;
+  font: inherit;
+  font-size: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.notes-share-cancel {
+  background: #fff8ef;
+  color: #3b2a1f;
+  align-self: flex-start;
+}
+
+.notes-share-empty {
+  font-size: 8px;
+  color: #8a6a5a;
+  line-height: 1.5;
 }
 
 .notes-close {

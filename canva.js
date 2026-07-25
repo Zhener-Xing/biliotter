@@ -53,6 +53,21 @@ const {
   loadTokenForUid,
 } = require('./cloud-sync');
 const {
+  startFriendsCloud,
+  stopFriendsCloud,
+  listFriends,
+  getInvite,
+  createInvite,
+  cancelInvite,
+  joinInvite,
+  removeFriend,
+  petFriend,
+  shareNote,
+  listNoteInbox,
+  acceptNoteShare,
+  rejectNoteShare,
+} = require('./friends-cloud');
+const {
   touchExtensionPresence,
   isExtensionAlive,
   pollExtensionPresence,
@@ -143,6 +158,7 @@ let mainWindow;
 let notesWindow = null;
 let chatWindow = null;
 let homeWindow = null;
+let friendsWindow = null;
 let bridgeServer;
 let homeServer;
 let latestEvent = null;
@@ -417,6 +433,24 @@ function chatPageBounds() {
   return { width, height, x, y };
 }//对话框页面设置
 
+function friendsPageBounds() {
+  const anchor =
+    mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow.getBounds()
+      : { x: 0, y: 0, width: 1, height: 1 };
+  const { workArea } = screen.getDisplayMatching(anchor);
+  const width = Math.min(480, Math.max(400, Math.round(workArea.width * 0.34)));
+  const height = Math.min(720, Math.max(560, Math.round(workArea.height * 0.68)));
+  const pet = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
+  let x = Math.round(workArea.x + (workArea.width - width) / 2);
+  let y = Math.round(workArea.y + (workArea.height - height) / 2);
+  if (pet) {
+    x = Math.max(workArea.x + 16, pet.x - width - 12);
+    y = Math.max(workArea.y + 16, Math.min(pet.y, workArea.y + workArea.height - height - 16));
+  }
+  return { width, height, x, y };
+}
+
 function eventBvid(ev) {
   return ev?.bvid || ev?.modelInput?.video?.bvid || null;
 }
@@ -522,7 +556,7 @@ function broadcastPetEvent(payload, opts = {}) {
     latestEvent = payload;
     updateNoteContext(payload);
   }
-  for (const win of [mainWindow, notesWindow, chatWindow, homeWindow]) {
+  for (const win of [mainWindow, notesWindow, chatWindow, homeWindow, friendsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send('pet:event', payload);
     }
@@ -638,6 +672,53 @@ function openChatWindow() {
   return { ok: true, opened: true };
 }//打开聊天页面，不用管它
 
+function openFriendsWindow() {
+  const gate = requireBoundAccount();
+  if (!gate.ok) {
+    notifyGateBlocked(gate.error, 'open_friends');
+    return { ok: false, error: gate.error || 'not_bound', message: gateMessage(gate.error) };
+  }
+  if (!cloudEnabled()) {
+    notifyGateBlocked('cloud_disabled', 'open_friends');
+    return {
+      ok: false,
+      error: 'cloud_disabled',
+      message: '未配置云端，无法使用好友功能',
+    };
+  }
+
+  if (friendsWindow && !friendsWindow.isDestroyed()) {
+    friendsWindow.focus();
+    return { ok: true, focused: true };
+  }
+
+  const bounds = friendsPageBounds();
+  friendsWindow = new BrowserWindow({
+    ...bounds,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    minWidth: 380,
+    minHeight: 480,
+    hasShadow: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  friendsWindow.loadFile(path.join(__dirname, 'friends', 'friends.html'));
+  friendsWindow.on('closed', () => {
+    friendsWindow = null;
+  });
+
+  return { ok: true, opened: true };
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: PET_WINDOW.width,
@@ -674,6 +755,9 @@ function createWindow() {
     }
     if (homeWindow && !homeWindow.isDestroyed()) {
       homeWindow.close();
+    }
+    if (friendsWindow && !friendsWindow.isDestroyed()) {
+      friendsWindow.close();
     }
   });
 }//窗口创建管理函数
@@ -816,7 +900,7 @@ function notifyGateBlocked(error, via = 'gate') {
 }
 
 function closeAccountWindows() {
-  for (const win of [notesWindow, chatWindow, homeWindow]) {
+  for (const win of [notesWindow, chatWindow, homeWindow, friendsWindow]) {
     if (win && !win.isDestroyed()) {
       try {
         win.close();
@@ -1303,6 +1387,97 @@ ipcMain.handle('pet:openNotesPage', () => openNotesWindow());
 
 ipcMain.handle('pet:openChatPage', () => openChatWindow());
 
+ipcMain.handle('pet:openFriendsPage', () => openFriendsWindow());
+
+ipcMain.handle('pet:friendsList', () => listFriends());
+ipcMain.handle('pet:friendsGetInvite', () => getInvite());
+ipcMain.handle('pet:friendsCreateInvite', (_event, payload = {}) =>
+  createInvite(payload.pin, payload.ttlMs)
+);
+ipcMain.handle('pet:friendsCancelInvite', () => cancelInvite());
+ipcMain.handle('pet:friendsJoin', (_event, payload = {}) => joinInvite(payload.pin));
+ipcMain.handle('pet:friendsRemove', (_event, payload = {}) => removeFriend(payload.uid));
+ipcMain.handle('pet:friendsPet', (_event, payload = {}) => petFriend(payload.uid));
+
+ipcMain.handle('pet:friendsNoteShare', async (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) {
+    return { ok: false, error: bound.error || 'not_bound', message: gateMessage(bound.error) };
+  }
+  if (!cloudEnabled()) {
+    return { ok: false, error: 'cloud_disabled', message: gateMessage('cloud_disabled') };
+  }
+  const toUid = String(payload?.toUid || payload?.uid || '').trim();
+  const bvid = String(payload?.bvid || '').trim();
+  if (!toUid || !bvid) return { ok: false, error: 'missing_params' };
+  const doc = loadNoteDoc(bvid);
+  if (!doc) return { ok: false, error: 'note_not_found' };
+  const bodyMd = String(doc.bodyMd || '').trim();
+  if (!bodyMd) return { ok: false, error: 'empty_note' };
+  return shareNote({
+    toUid,
+    bvid: doc.bvid,
+    title: doc.title || bvid,
+    bodyMd: doc.bodyMd,
+    notes: doc.notes,
+    mode: doc.mode || 'user',
+  });
+});
+
+ipcMain.handle('pet:friendsNoteInbox', () => listNoteInbox());
+
+ipcMain.handle('pet:friendsNoteAccept', async (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) {
+    return { ok: false, error: bound.error || 'not_bound', message: gateMessage(bound.error) };
+  }
+  const id = Number(payload?.id);
+  if (!Number.isFinite(id) || id <= 0) return { ok: false, error: 'missing_id' };
+  const res = await acceptNoteShare(id);
+  if (!res?.ok || !res.note) return res || { ok: false, error: 'accept_failed' };
+
+  const note = res.note;
+  let targetBvid = String(note.bvid || '').trim();
+  if (!targetBvid) return { ok: false, error: 'missing_bvid' };
+
+  if (loadNoteDoc(targetBvid)) {
+    const from = String(note.fromUid || 'x').replace(/[^\w.-]/g, '').slice(0, 16) || 'x';
+    const base = targetBvid.replace(/[^\w.-]/g, '').slice(0, 40) || 'note';
+    targetBvid = `share_${from}_${base}`.slice(0, 64);
+    let n = 1;
+    while (loadNoteDoc(targetBvid) && n < 20) {
+      targetBvid = `share_${from}_${base}_${n}`.slice(0, 64);
+      n += 1;
+    }
+  }
+
+  const saved = saveNoteDoc(targetBvid, {
+    title: note.title || targetBvid,
+    bodyMd: note.bodyMd || '',
+    notes: note.notes || null,
+    mode: 'user',
+    sessionId: null,
+  });
+  if (!saved) return { ok: false, error: 'save_failed' };
+  return {
+    ok: true,
+    bvid: saved.bvid,
+    title: saved.title,
+    renamed: saved.bvid !== note.bvid,
+    fromUname: note.fromUname || null,
+  };
+});
+
+ipcMain.handle('pet:friendsNoteReject', async (_event, payload = {}) => {
+  const bound = requireBoundAccount();
+  if (!bound.ok) {
+    return { ok: false, error: bound.error || 'not_bound', message: gateMessage(bound.error) };
+  }
+  const id = Number(payload?.id);
+  if (!Number.isFinite(id) || id <= 0) return { ok: false, error: 'missing_id' };
+  return rejectNoteShare(id);
+});
+
 ipcMain.handle('pet:gameAnswer', (_event, payload = {}) => {
   const bound = requireBoundAccount();
   if (!bound.ok) {
@@ -1762,6 +1937,9 @@ if (gotTheLock) {
         }
       },
     });
+    startFriendsCloud({
+      onBroadcast: (event) => broadcastPetEvent(event, { touchLatest: false }),
+    });
     try {
       sweepOrphanLocalStores();
     } catch (err) {
@@ -1871,6 +2049,7 @@ if (gotTheLock) {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    stopFriendsCloud();
     stopCloudSync();
     closeNotesDb();
     clearPidFile();

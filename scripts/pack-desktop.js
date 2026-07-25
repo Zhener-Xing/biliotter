@@ -1,18 +1,21 @@
 'use strict';
 
 /**
- * Package desktop pet from the already-installed electron binary (no download).
- * Output: dist/BiliOtter-<platform>-<arch>/
+ * Package BiliOtter desktop app.
+ *
+ *   node scripts/pack-desktop.js                  # current OS
+ *   node scripts/pack-desktop.js --win            # Windows x64 zip (cross-pack from Mac/Linux)
+ *   node scripts/pack-desktop.js --platform=win32 --arch=x64 --zip
  */
 const path = require('path');
 const fs = require('fs');
-const { execFileSync } = require('child_process');
+const https = require('https');
+const http = require('http');
+const { execFileSync, spawnSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
 const outRoot = path.join(root, 'dist');
-const platform = process.platform;
-const arch = process.arch;
-const outDir = path.join(outRoot, `BiliOtter-${platform}-${arch}`);
+const cacheRoot = path.join(outRoot, '.electron-cache');
 
 const SKIP_TOP = new Set([
   'dist',
@@ -24,12 +27,40 @@ const SKIP_TOP = new Set([
   'node_modules',
 ]);
 
+function parseArgs(argv) {
+  const out = {
+    platform: process.platform,
+    arch: process.arch,
+    zip: false,
+  };
+  for (const raw of argv) {
+    if (raw === '--win' || raw === '--windows') {
+      out.platform = 'win32';
+      out.arch = 'x64';
+      out.zip = true;
+      continue;
+    }
+    if (raw === '--zip') {
+      out.zip = true;
+      continue;
+    }
+    const m = /^--([^=]+)=(.*)$/.exec(raw);
+    if (!m) continue;
+    if (m[1] === 'platform') out.platform = m[2];
+    if (m[1] === 'arch') out.arch = m[2];
+  }
+  if (out.platform === 'win32' && !out.arch) out.arch = 'x64';
+  return out;
+}
+
+function electronVersion() {
+  return require(path.join(root, 'node_modules', 'electron', 'package.json')).version;
+}
+
 function electronBinaryPath() {
-  // eslint-disable-next-line import/no-extraneous-dependencies
   return require('electron');
 }
 
-/** Preserve relative symlinks inside Electron.app (fs.cpSync rewrites them to abs paths). */
 function copyAppBundle(src, dest) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -71,7 +102,6 @@ function copyAppSources(appDir) {
     if (name === '.env' || name === '.env.local') continue;
     copyFiltered(path.join(root, name), path.join(appDir, name));
   }
-  // Minimal package.json for Electron entry
   const pkg = {
     name: 'BiliOtter',
     productName: 'BiliOtter',
@@ -94,9 +124,136 @@ function copyBridge(resourcesDir) {
   return dest;
 }
 
-function packMac() {
+function injectAppIntoResources(resourcesDir) {
+  try {
+    fs.rmSync(path.join(resourcesDir, 'default_app.asar'), { force: true });
+  } catch {
+    /* ignore */
+  }
+  const appDir = path.join(resourcesDir, 'app');
+  fs.rmSync(appDir, { recursive: true, force: true });
+  copyAppSources(appDir);
+  return copyBridge(resourcesDir);
+}
+
+function downloadFile(url, dest) {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const tmp = `${dest}.partial`;
+    const file = fs.createWriteStream(tmp);
+
+    const get = (u, redirects = 0) => {
+      if (redirects > 8) {
+        reject(new Error('too many redirects'));
+        return;
+      }
+      const lib = u.startsWith('https') ? https : http;
+      const req = lib.get(u, { headers: { 'User-Agent': 'bili-pet-pack' } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          get(res.headers.location, redirects + 1);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error(`download failed ${res.statusCode} ${u}`));
+          res.resume();
+          return;
+        }
+        const total = Number(res.headers['content-length']) || 0;
+        let got = 0;
+        let lastPct = -1;
+        res.on('data', (chunk) => {
+          got += chunk.length;
+          if (!total) return;
+          const pct = Math.floor((got / total) * 100);
+          if (pct !== lastPct && pct % 10 === 0) {
+            lastPct = pct;
+            process.stdout.write(`\r[pack] download ${pct}%`);
+          }
+        });
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close(() => {
+            if (total) process.stdout.write('\r[pack] download 100%\n');
+            fs.renameSync(tmp, dest);
+            resolve(dest);
+          });
+        });
+      });
+      req.on('error', (err) => {
+        try {
+          fs.unlinkSync(tmp);
+        } catch {
+          /* ignore */
+        }
+        reject(err);
+      });
+    };
+
+    get(url);
+  });
+}
+
+function electronZipUrl(version, platform, arch) {
+  const mirror = String(process.env.ELECTRON_MIRROR || '')
+    .trim()
+    .replace(/\/+$/, '');
+  const file = `electron-v${version}-${platform}-${arch}.zip`;
+  if (mirror) {
+    // e.g. https://npmmirror.com/mirrors/electron/
+    return `${mirror}/v${version}/${file}`;
+  }
+  return `https://github.com/electron/electron/releases/download/v${version}/${file}`;
+}
+
+async function ensureElectronDist(platform, arch) {
+  const version = electronVersion();
+  const label = `${platform}-${arch}`;
+  const zipPath = path.join(cacheRoot, `electron-v${version}-${label}.zip`);
+  const extractDir = path.join(cacheRoot, `electron-v${version}-${label}`);
+
+  if (!fs.existsSync(path.join(extractDir, platform === 'darwin' ? 'Electron.app' : platform === 'win32' ? 'electron.exe' : 'electron'))) {
+    if (!fs.existsSync(zipPath)) {
+      const url = electronZipUrl(version, platform, arch);
+      console.log(`[pack] downloading Electron ${version} (${label})`);
+      console.log(`[pack] ${url}`);
+      await downloadFile(url, zipPath);
+    } else {
+      console.log(`[pack] using cached zip ${zipPath}`);
+    }
+    fs.rmSync(extractDir, { recursive: true, force: true });
+    fs.mkdirSync(extractDir, { recursive: true });
+    console.log('[pack] extracting…');
+    const r = spawnSync('unzip', ['-q', '-o', zipPath, '-d', extractDir], {
+      stdio: 'inherit',
+    });
+    if (r.status !== 0) {
+      throw new Error('unzip failed — need `unzip` on PATH');
+    }
+  } else {
+    console.log(`[pack] using cached Electron ${extractDir}`);
+  }
+  return extractDir;
+}
+
+function zipFolder(folderPath, zipPath) {
+  fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+  if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+  const parent = path.dirname(folderPath);
+  const base = path.basename(folderPath);
+  const r = spawnSync('zip', ['-r', '-q', zipPath, base], {
+    cwd: parent,
+    stdio: 'inherit',
+  });
+  if (r.status !== 0) {
+    throw new Error('zip failed — need `zip` on PATH');
+  }
+  return zipPath;
+}
+
+function packMacFromLocal(outDir) {
   const bin = electronBinaryPath();
-  const electronApp = path.resolve(bin, '..', '..', '..'); // Electron.app
+  const electronApp = path.resolve(bin, '..', '..', '..');
   if (!electronApp.endsWith('.app') || !fs.existsSync(electronApp)) {
     throw new Error(`Electron.app not found near ${bin}`);
   }
@@ -106,21 +263,9 @@ function packMac() {
 
   const destApp = path.join(outDir, 'BiliOtter.app');
   copyAppBundle(electronApp, destApp);
-
-  // Rename binary display name is optional; keep Electron executable.
   const resources = path.join(destApp, 'Contents', 'Resources');
-  // Prefer our app/ over Electron's default_app.asar
-  try {
-    fs.rmSync(path.join(resources, 'default_app.asar'), { force: true });
-  } catch {
-    /* ignore */
-  }
-  const appDir = path.join(resources, 'app');
-  fs.rmSync(appDir, { recursive: true, force: true });
-  copyAppSources(appDir);
-  const bridge = copyBridge(resources);
+  const bridge = injectAppIntoResources(resources);
 
-  // Ad-hoc sign so Gatekeeper allows local run after we inject Resources/app.
   try {
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', destApp], {
       stdio: 'inherit',
@@ -132,50 +277,96 @@ function packMac() {
   return { destApp, bridge };
 }
 
-function packWinOrLinux() {
-  const bin = electronBinaryPath();
-  const distDir = path.dirname(bin);
-  if (!fs.existsSync(distDir)) {
-    throw new Error(`Electron dist not found: ${distDir}`);
+function packWinFromDist(electronDist, outDir) {
+  const exeSrc = path.join(electronDist, 'electron.exe');
+  if (!fs.existsSync(exeSrc)) {
+    throw new Error(`electron.exe not found in ${electronDist}`);
   }
 
   fs.rmSync(outDir, { recursive: true, force: true });
-  copyAppBundle(distDir, outDir);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  // Copy all Electron win files into output folder
+  for (const name of fs.readdirSync(electronDist)) {
+    if (name === 'version' || name === 'LICENSE' || name === 'LICENSES.chromium.html') {
+      // keep for compliance
+    }
+    const from = path.join(electronDist, name);
+    const to = path.join(outDir, name);
+    fs.cpSync(from, to, { recursive: true });
+  }
 
   const resources = path.join(outDir, 'resources');
-  try {
-    fs.rmSync(path.join(resources, 'default_app.asar'), { force: true });
-  } catch {
-    /* ignore */
-  }
-  const appDir = path.join(resources, 'app');
-  fs.rmSync(appDir, { recursive: true, force: true });
-  copyAppSources(appDir);
-  const bridge = copyBridge(resources);
+  const bridge = injectAppIntoResources(resources);
 
-  const exeName = platform === 'win32' ? 'BiliOtter.exe' : 'BiliOtter';
-  const electronExe = platform === 'win32' ? 'electron.exe' : 'electron';
-  const from = path.join(outDir, electronExe);
-  const to = path.join(outDir, exeName);
-  if (fs.existsSync(from) && !fs.existsSync(to)) {
-    fs.renameSync(from, to);
-  }
+  const from = path.join(outDir, 'electron.exe');
+  const to = path.join(outDir, 'BiliOtter.exe');
+  if (fs.existsSync(from)) fs.renameSync(from, to);
 
-  return { destApp: outDir, bridge };
+  return { destApp: path.join(outDir, 'BiliOtter.exe'), bridge };
 }
 
-function main() {
+function packLinuxFromDist(electronDist, outDir) {
+  fs.rmSync(outDir, { recursive: true, force: true });
+  fs.cpSync(electronDist, outDir, { recursive: true });
+  const resources = path.join(outDir, 'resources');
+  const bridge = injectAppIntoResources(resources);
+  const from = path.join(outDir, 'electron');
+  const to = path.join(outDir, 'BiliOtter');
+  if (fs.existsSync(from)) fs.renameSync(from, to);
+  return { destApp: to, bridge };
+}
+
+async function main() {
   if (!fs.existsSync(path.join(root, 'node_modules', 'electron'))) {
     console.error('Run npm install first (needs electron).');
     process.exit(1);
   }
 
-  const result = platform === 'darwin' ? packMac() : packWinOrLinux();
+  const opts = parseArgs(process.argv.slice(2));
+  const { platform, arch } = opts;
+  const outDir = path.join(outRoot, `BiliOtter-${platform}-${arch}`);
+  fs.mkdirSync(outRoot, { recursive: true });
+
+  let result;
+  const sameHost = platform === process.platform && arch === process.arch;
+
+  if (platform === 'darwin' && sameHost) {
+    result = packMacFromLocal(outDir);
+  } else if (platform === 'win32') {
+    const dist = await ensureElectronDist('win32', arch);
+    result = packWinFromDist(dist, outDir);
+  } else if (platform === 'linux') {
+    const dist = sameHost
+      ? path.dirname(electronBinaryPath())
+      : await ensureElectronDist('linux', arch);
+    result = packLinuxFromDist(dist, outDir);
+  } else if (platform === 'darwin') {
+    const dist = await ensureElectronDist('darwin', arch);
+    // dist contains Electron.app
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(outDir, { recursive: true });
+    const destApp = path.join(outDir, 'BiliOtter.app');
+    copyAppBundle(path.join(dist, 'Electron.app'), destApp);
+    const bridge = injectAppIntoResources(path.join(destApp, 'Contents', 'Resources'));
+    result = { destApp, bridge };
+  } else {
+    throw new Error(`unsupported platform ${platform}`);
+  }
+
   console.log('Wrote', outDir);
   console.log('  app:', result.destApp);
   console.log('  bridge:', result.bridge);
-  console.log('\nTip: zip the folder to share, e.g.');
-  console.log(`  cd dist && zip -r BiliOtter-${platform}-${arch}.zip BiliOtter-${platform}-${arch}`);
+
+  const wantZip = opts.zip || platform === 'win32';
+  if (wantZip) {
+    const zipPath = path.join(outRoot, `BiliOtter-${platform}-${arch}.zip`);
+    zipFolder(outDir, zipPath);
+    console.log('Wrote', zipPath);
+  }
 }
 
-main();
+main().catch((err) => {
+  console.error('[pack] failed:', err.message || err);
+  process.exit(1);
+});
