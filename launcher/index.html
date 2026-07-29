@@ -82,6 +82,8 @@
         display: flex;
         align-items: flex-start;
         gap: 8px;
+        -webkit-app-region: drag;
+        cursor: move;
       }
 
       .brand-text { flex: 1; min-width: 0; }
@@ -116,6 +118,7 @@
         box-shadow: 2px 2px 0 var(--line);
         display: grid;
         place-items: center;
+        -webkit-app-region: no-drag;
       }
 
       .btn-close-window:hover {
@@ -123,6 +126,68 @@
         color: #fff8f0;
         transform: translate(-1px, -1px);
         box-shadow: 3px 3px 0 var(--line);
+      }
+
+      /* 知识库窗口：空白区域可拖动；交互控件单独 no-drag */
+      .sidebar {
+        -webkit-app-region: drag;
+      }
+      .side-tabs,
+      .side-panel,
+      .side-foot,
+      .search-wrap,
+      .hits,
+      .note-list,
+      .course-tree,
+      .course-actions,
+      .side-create-box,
+      .list-meta,
+      .list-empty {
+        -webkit-app-region: no-drag;
+      }
+      .side-panel {
+        display: none;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+      }
+      .side-panel.active {
+        display: flex;
+      }
+      .main {
+        -webkit-app-region: drag;
+      }
+      .main-toolbar,
+      .pane,
+      .course-mm-split,
+      .course-mm-map,
+      .course-mm-editor,
+      .edit-split,
+      .preview-body,
+      .activity-card {
+        -webkit-app-region: no-drag;
+      }
+      .main-toolbar .spacer {
+        -webkit-app-region: drag;
+        cursor: move;
+        min-width: 48px;
+        align-self: stretch;
+      }
+      .pane-welcome,
+      .pane-welcome .welcome {
+        -webkit-app-region: drag;
+        cursor: move;
+      }
+      button,
+      .btn,
+      input,
+      textarea,
+      select,
+      a,
+      .note-list li,
+      .course-tree li,
+      .hit-item {
+        -webkit-app-region: no-drag;
       }
 
       .side-tabs {
@@ -154,7 +219,6 @@
         color: var(--accent-ink);
       }
 
-      .side-panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
       .side-panel.active { display: flex; }
 
       .course-actions {
@@ -1165,7 +1229,7 @@
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: minmax(200px, 34%) 1fr;
+        grid-template-columns: minmax(160px, 28%) 1fr;
         gap: 12px;
         margin-top: 8px;
       }
@@ -1197,6 +1261,91 @@
         width: 100%;
         height: 100%;
         display: block;
+        cursor: grab;
+        touch-action: none;
+      }
+
+      #course-mm-svg:active {
+        cursor: grabbing;
+      }
+
+      #course-mm-svg .mm-pan-hit {
+        pointer-events: all;
+        fill: transparent;
+      }
+
+      #course-mm-svg .markmap-foreign {
+        cursor: text;
+      }
+
+      #course-mm-svg .markmap-node.mm-selected > circle {
+        stroke-width: 3px;
+        filter: drop-shadow(0 0 3px rgba(196, 92, 38, 0.55));
+      }
+
+      #course-mm-svg .markmap-node.mm-selected .markmap-foreign > div > div {
+        outline: 2px solid var(--accent, #c45c26);
+        outline-offset: 2px;
+        border-radius: 4px;
+        background: rgba(255, 236, 210, 0.85);
+      }
+
+      .mm-inline-edit {
+        position: absolute;
+        z-index: 6;
+        min-width: 120px;
+        max-width: 280px;
+        padding: 6px 8px;
+        font: 14px/1.35 var(--font-ui, system-ui, sans-serif);
+        color: var(--ink);
+        border: 2px solid var(--accent, #c45c26);
+        border-radius: 8px;
+        background: #fffdf8;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+        outline: none;
+      }
+
+      .mm-ctx {
+        position: fixed;
+        z-index: 40;
+        min-width: 148px;
+        padding: 6px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fffdf8;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+        display: none;
+      }
+
+      .mm-ctx.open {
+        display: block;
+      }
+
+      .mm-ctx button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        background: transparent;
+        padding: 8px 10px;
+        border-radius: 7px;
+        font: 13px/1.3 var(--font-ui, system-ui, sans-serif);
+        color: var(--ink);
+        cursor: pointer;
+      }
+
+      .mm-ctx button:hover {
+        background: rgba(196, 92, 38, 0.1);
+      }
+
+      .mm-ctx button.danger {
+        color: #a33;
+      }
+
+      .mm-ctx .mm-ctx-sep {
+        height: 1px;
+        margin: 4px 6px;
+        background: var(--line);
       }
 
       .course-mm-hint {
@@ -1212,7 +1361,7 @@
       @media (max-width: 900px) {
         .course-mm-split {
           grid-template-columns: 1fr;
-          grid-template-rows: 36% 1fr;
+          grid-template-rows: 28% 1fr;
         }
       }
 
@@ -1445,8 +1594,10 @@
 
         <div class="main-toolbar" id="toolbar-course" hidden>
           <button type="button" class="btn primary" id="btn-mm-generate">一键生成导图</button>
+          <button type="button" class="btn" id="btn-mm-add-child">添加子节点</button>
+          <button type="button" class="btn" id="btn-mm-add-sibling">添加同级</button>
           <button type="button" class="btn" id="btn-mm-fit">适应画布</button>
-          <button type="button" class="btn" id="btn-mm-save">保存大纲</button>
+          <button type="button" class="btn" id="btn-mm-save">保存</button>
           <span class="spacer"></span>
           <span class="mm-status" id="mm-status"></span>
         </div>
@@ -1578,15 +1729,23 @@
               id="course-mm-editor"
               class="course-mm-editor"
               spellcheck="false"
-              placeholder="用 # / ## / ### 写大纲；或点「一键生成导图」从组内笔记切块生成…"
+              placeholder="也可用 # / ## / ### 写大纲；或在右侧导图上直接双击编辑…"
             ></textarea>
-            <div class="course-mm-map">
+            <div class="course-mm-map" id="course-mm-map">
               <svg id="course-mm-svg"></svg>
-              <p class="course-mm-hint">滚轮缩放 · 拖拽平移 · 点圆点折叠</p>
+              <p class="course-mm-hint">双击改名 · 右键菜单 · 滚轮缩放 · 拖拽平移 · 点圆点折叠</p>
             </div>
           </div>
         </div>
       </section>
+
+      <div class="mm-ctx" id="mm-ctx" role="menu" hidden>
+        <button type="button" data-mm-act="rename">重命名</button>
+        <button type="button" data-mm-act="add-child">添加子节点</button>
+        <button type="button" data-mm-act="add-sibling">添加同级节点</button>
+        <div class="mm-ctx-sep"></div>
+        <button type="button" class="danger" data-mm-act="delete">删除节点</button>
+      </div>
 
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
@@ -1648,6 +1807,10 @@
         const btnMmGenerate = document.getElementById("btn-mm-generate");
         const btnMmFit = document.getElementById("btn-mm-fit");
         const btnMmSave = document.getElementById("btn-mm-save");
+        const btnMmAddChild = document.getElementById("btn-mm-add-child");
+        const btnMmAddSibling = document.getElementById("btn-mm-add-sibling");
+        const courseMmMap = document.getElementById("course-mm-map");
+        const mmCtx = document.getElementById("mm-ctx");
 
         let allNotes = [];
         let allCourses = [];
@@ -1695,6 +1858,11 @@
         const btnHeatInterrupt = document.getElementById("btn-heat-interrupt");
         let mmGenerating = false;
         let mmLoadedGroupId = null;
+        let mmSelectedNode = null;
+        let mmSelectedPath = null;
+        let mmInlineInput = null;
+        let mmSkipEditorSync = false;
+        let mmFoldByPath = Object.create(null);
 
         function showToast(message) {
           toastEl.textContent = message;
@@ -2095,35 +2263,454 @@
           return true;
         }
 
-        function renderCourseMindmap(markdown) {
+        function mmNodePlainText(node) {
+          if (!node) return "";
+          const tmp = document.createElement("div");
+          tmp.innerHTML = String(node.content || "");
+          return String(tmp.textContent || "")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+
+        function mmEscapeText(text) {
+          return String(text || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+        }
+
+        function mmTreeToMarkdown(node, depth) {
+          if (!node) return "";
+          const level = Math.max(0, Number(depth) || 0);
+          const hashes = "#".repeat(Math.min(level + 1, 6));
+          const title = mmNodePlainText(node) || "未命名";
+          const lines = [hashes + " " + title];
+          const kids = Array.isArray(node.children) ? node.children : [];
+          for (let i = 0; i < kids.length; i += 1) {
+            const part = mmTreeToMarkdown(kids[i], level + 1);
+            if (part) lines.push(part);
+          }
+          return lines.join("\n");
+        }
+
+        function mmGetRoot() {
+          return mmInstance && mmInstance.state ? mmInstance.state.data : null;
+        }
+
+        function mmFindParent(root, target) {
+          if (!root || !target || root === target) return null;
+          const kids = Array.isArray(root.children) ? root.children : [];
+          for (let i = 0; i < kids.length; i += 1) {
+            if (kids[i] === target) return root;
+            const found = mmFindParent(kids[i], target);
+            if (found) return found;
+          }
+          return null;
+        }
+
+        function mmSyncEditorFromTree(opts) {
+          opts = opts || {};
+          const root = mmGetRoot();
+          if (!root || !courseMmEditor) return "";
+          const md = mmTreeToMarkdown(root, 0) + "\n";
+          mmSkipEditorSync = true;
+          courseMmEditor.value = md;
+          mmSkipEditorSync = false;
+          if (activeCourseId && courseDetails[activeCourseId]) {
+            courseDetails[activeCourseId].mindmapMd = md;
+          }
+          if (!opts.skipSave) scheduleCourseMindmapSave();
+          return md;
+        }
+
+        function mmClearSelection() {
+          if (courseMmSvg) {
+            courseMmSvg.querySelectorAll(".markmap-node.mm-selected").forEach(function (el) {
+              el.classList.remove("mm-selected");
+            });
+          }
+          mmSelectedNode = null;
+          mmSelectedPath = null;
+        }
+
+        function mmSelectNode(node, el) {
+          mmClearSelection();
+          mmSelectedNode = node || null;
+          mmSelectedPath =
+            node && node.state && node.state.path != null ? String(node.state.path) : null;
+          if (el) el.classList.add("mm-selected");
+        }
+
+        function mmExpandAll(root) {
+          function walk(node) {
+            if (!node) return;
+            if (node.payload && node.payload.fold) {
+              node.payload = Object.assign({}, node.payload, { fold: 0 });
+            }
+            const kids = Array.isArray(node.children) ? node.children : [];
+            for (let i = 0; i < kids.length; i += 1) walk(kids[i]);
+          }
+          walk(root);
+        }
+
+        function mmFindByPath(root, path) {
+          if (!root || path == null || path === "") return null;
+          const want = String(path);
+          let hit = null;
+          function walk(node) {
+            if (!node || hit) return;
+            if (node.state && String(node.state.path) === want) {
+              hit = node;
+              return;
+            }
+            const kids = Array.isArray(node.children) ? node.children : [];
+            for (let i = 0; i < kids.length; i += 1) walk(kids[i]);
+          }
+          walk(root);
+          return hit;
+        }
+
+        function mmCloseContextMenu() {
+          if (!mmCtx) return;
+          mmCtx.classList.remove("open");
+          mmCtx.hidden = true;
+        }
+
+        function mmOpenContextMenu(x, y) {
+          if (!mmCtx) return;
+          mmCtx.hidden = false;
+          mmCtx.classList.add("open");
+          const pad = 8;
+          const w = mmCtx.offsetWidth || 160;
+          const h = mmCtx.offsetHeight || 160;
+          const left = Math.min(x, window.innerWidth - w - pad);
+          const top = Math.min(y, window.innerHeight - h - pad);
+          mmCtx.style.left = Math.max(pad, left) + "px";
+          mmCtx.style.top = Math.max(pad, top) + "px";
+        }
+
+        function mmCancelInlineEdit(commit) {
+          if (!mmInlineInput) return;
+          const input = mmInlineInput;
+          const node = input._mmNode;
+          const value = String(input.value || "").trim();
+          mmInlineInput = null;
+          input.remove();
+          if (commit && node) {
+            const next = value || "未命名";
+            if (mmNodePlainText(node) !== next) {
+              node.content = mmEscapeText(next);
+              mmRefreshLiveTree("已改名 · 自动保存中");
+            }
+          }
+        }
+
+        function mmStartRename(node, anchorEl) {
+          if (!node || !courseMmMap) return;
+          mmCancelInlineEdit(false);
+          mmCloseContextMenu();
+          const input = document.createElement("input");
+          input.type = "text";
+          input.className = "mm-inline-edit";
+          input.value = mmNodePlainText(node);
+          input._mmNode = node;
+
+          const mapRect = courseMmMap.getBoundingClientRect();
+          let left = 24;
+          let top = 24;
+          if (anchorEl && typeof anchorEl.getBoundingClientRect === "function") {
+            const r = anchorEl.getBoundingClientRect();
+            left = Math.max(8, r.left - mapRect.left);
+            top = Math.max(8, r.top - mapRect.top - 4);
+          }
+          input.style.left = left + "px";
+          input.style.top = top + "px";
+          courseMmMap.appendChild(input);
+          mmInlineInput = input;
+          input.focus();
+          input.select();
+
+          input.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              mmCancelInlineEdit(true);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              mmCancelInlineEdit(false);
+            }
+            e.stopPropagation();
+          });
+          input.addEventListener("blur", function () {
+            setTimeout(function () {
+              if (mmInlineInput === input) mmCancelInlineEdit(true);
+            }, 0);
+          });
+          input.addEventListener("mousedown", function (e) {
+            e.stopPropagation();
+          });
+        }
+
+        function mmRefreshLiveTree(message, opts) {
+          opts = opts || {};
+          const root = mmGetRoot();
+          if (!root || !mmInstance) return;
+          const md = mmTreeToMarkdown(root, 0) + "\n";
+          mmSkipEditorSync = true;
+          if (courseMmEditor) courseMmEditor.value = md;
+          mmSkipEditorSync = false;
+          if (activeCourseId && courseDetails[activeCourseId]) {
+            courseDetails[activeCourseId].mindmapMd = md;
+          }
+          try {
+            // 编辑时不动画、强制展开，避免子节点被收回
+            if (typeof mmInstance.setOptions === "function") {
+              mmInstance.setOptions({
+                initialExpandLevel: -1,
+                duration: 0,
+              });
+            }
+            mmExpandAll(root);
+            mmInstance.setData(root);
+          } catch (err) {
+            console.warn("[mindmap] setData", err);
+            renderCourseMindmap(md, { skipFit: true });
+            return;
+          }
+          requestAnimationFrame(function () {
+            bindMindmapEditHandlers();
+            const liveRoot = mmGetRoot();
+            let want = opts.renameNode || null;
+            if (!want && mmSelectedPath) want = mmFindByPath(liveRoot, mmSelectedPath);
+            if (want || opts.renameNode) {
+              const targetText = want ? mmNodePlainText(want) : "";
+              const nodes = courseMmSvg.querySelectorAll("g.markmap-node");
+              let hit = null;
+              for (let i = 0; i < nodes.length; i += 1) {
+                const g = nodes[i];
+                const datum = window.d3.select(g).datum();
+                if (!datum) continue;
+                if (
+                  (want && datum === want) ||
+                  (mmSelectedPath &&
+                    datum.state &&
+                    String(datum.state.path) === String(mmSelectedPath)) ||
+                  (opts.renameNode &&
+                    targetText &&
+                    mmNodePlainText(datum) === targetText)
+                ) {
+                  hit = { g: g, datum: datum };
+                  if (want && datum === want) break;
+                }
+              }
+              if (!hit && opts.renameNode) {
+                for (let i = nodes.length - 1; i >= 0; i -= 1) {
+                  const g = nodes[i];
+                  const datum = window.d3.select(g).datum();
+                  if (datum && mmNodePlainText(datum) === "新节点") {
+                    hit = { g: g, datum: datum };
+                    break;
+                  }
+                }
+              }
+              if (hit) {
+                mmSelectNode(hit.datum, hit.g);
+                if (opts.renameNode) {
+                  mmStartRename(hit.datum, hit.g.querySelector(".markmap-foreign") || hit.g);
+                }
+              }
+            }
+          });
+          scheduleCourseMindmapSave();
+          if (message) setMmStatus(message);
+        }
+
+        function mmAddChild(parent) {
+          const root = mmGetRoot();
+          if (!parent) parent = mmSelectedNode || root;
+          if (!parent) {
+            showToast("请先选中一个节点");
+            return;
+          }
+          if (!Array.isArray(parent.children)) parent.children = [];
+          const child = { content: "新节点", children: [], payload: {} };
+          parent.children.push(child);
+          if (parent.payload && parent.payload.fold) parent.payload.fold = 0;
+          mmSelectedNode = child;
+          mmRefreshLiveTree("已添加子节点 · 自动保存中", { renameNode: child });
+        }
+
+        function mmAddSibling(node) {
+          const root = mmGetRoot();
+          if (!node) node = mmSelectedNode;
+          if (!node || !root) {
+            showToast("请先选中一个节点");
+            return;
+          }
+          if (node === root) {
+            mmAddChild(root);
+            return;
+          }
+          const parent = mmFindParent(root, node);
+          if (!parent) {
+            showToast("找不到父节点");
+            return;
+          }
+          if (!Array.isArray(parent.children)) parent.children = [];
+          const idx = parent.children.indexOf(node);
+          const sibling = { content: "新节点", children: [], payload: {} };
+          parent.children.splice(idx < 0 ? parent.children.length : idx + 1, 0, sibling);
+          mmSelectedNode = sibling;
+          mmRefreshLiveTree("已添加同级节点 · 自动保存中", { renameNode: sibling });
+        }
+
+        function mmDeleteNode(node) {
+          const root = mmGetRoot();
+          if (!node) node = mmSelectedNode;
+          if (!node || !root) {
+            showToast("请先选中一个节点");
+            return;
+          }
+          if (node === root) {
+            showToast("根节点不能删除，可直接改名");
+            return;
+          }
+          const parent = mmFindParent(root, node);
+          if (!parent || !Array.isArray(parent.children)) return;
+          const idx = parent.children.indexOf(node);
+          if (idx < 0) return;
+          parent.children.splice(idx, 1);
+          mmSelectedNode = parent;
+          mmRefreshLiveTree("已删除节点 · 自动保存中");
+        }
+
+        function bindMindmapEditHandlers() {
+          if (!courseMmSvg || !window.d3) return;
+          const nodes = courseMmSvg.querySelectorAll("g.markmap-node");
+          nodes.forEach(function (g) {
+            if (g._mmBound) return;
+            g._mmBound = true;
+
+            g.addEventListener("click", function (e) {
+              if (e.target && e.target.tagName === "circle") return;
+              e.stopPropagation();
+              const datum = window.d3.select(g).datum();
+              if (!datum) return;
+              mmSelectNode(datum, g);
+              mmCloseContextMenu();
+            });
+
+            g.addEventListener(
+              "dblclick",
+              function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const datum = window.d3.select(g).datum();
+                if (!datum) return;
+                mmSelectNode(datum, g);
+                const fo = g.querySelector(".markmap-foreign") || g;
+                mmStartRename(datum, fo);
+              },
+              true
+            );
+
+            const foDiv = g.querySelector(".markmap-foreign div div");
+            if (foDiv && !foDiv._mmBound) {
+              foDiv._mmBound = true;
+              foDiv.addEventListener("dblclick", function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const datum = window.d3.select(g).datum();
+                if (!datum) return;
+                mmSelectNode(datum, g);
+                mmStartRename(datum, g.querySelector(".markmap-foreign") || g);
+              });
+            }
+
+            g.addEventListener("contextmenu", function (e) {
+              e.preventDefault();
+              e.stopPropagation();
+              const datum = window.d3.select(g).datum();
+              if (!datum) return;
+              mmSelectNode(datum, g);
+              mmOpenContextMenu(e.clientX, e.clientY);
+            });
+          });
+
+          if (mmSelectedPath) {
+            nodes.forEach(function (g) {
+              const datum = window.d3.select(g).datum();
+              if (datum && datum.state && String(datum.state.path) === String(mmSelectedPath)) {
+                g.classList.add("mm-selected");
+                mmSelectedNode = datum;
+              }
+            });
+          }
+        }
+
+        function renderCourseMindmap(markdown, opts) {
+          opts = opts || {};
           if (!ensureMarkmap() || !courseMmSvg) return;
           try {
-            const md = String(markdown || "").trim() || "# 空导图\n## 点「一键生成导图」开始";
+            const md =
+              String(markdown || "").trim() || "# 空导图\n## 双击节点可编辑，或点「一键生成导图」";
             const { root } = mmTransformer.transform(md);
-            const opts = window.markmap.deriveOptions
+            mmExpandAll(root);
+            const markOpts = window.markmap.deriveOptions
               ? window.markmap.deriveOptions({
                   colorFreezeLevel: 2,
-                  maxWidth: 240,
-                  duration: 300,
-                  initialExpandLevel: 2,
+                  maxWidth: 280,
+                  duration: opts.skipFit ? 0 : 300,
+                  initialExpandLevel: -1,
                 })
-              : undefined;
+              : {
+                  initialExpandLevel: -1,
+                  duration: opts.skipFit ? 0 : 300,
+                  maxWidth: 280,
+                };
             if (!mmInstance) {
-              mmInstance = window.markmap.Markmap.create(courseMmSvg, opts, root);
+              mmInstance = window.markmap.Markmap.create(courseMmSvg, markOpts, root);
             } else {
+              if (typeof mmInstance.setOptions === "function") {
+                mmInstance.setOptions(markOpts);
+              }
               mmInstance.setData(root);
-              mmInstance.fit();
+              if (!opts.skipFit) mmInstance.fit();
             }
+            ensureMmPanHit();
+            requestAnimationFrame(function () {
+              bindMindmapEditHandlers();
+            });
           } catch (err) {
             console.warn("[mindmap]", err);
             setMmStatus("渲染失败");
           }
         }
 
+        /** 铺满画布的透明层，空白处也能拖拽平移 */
+        function ensureMmPanHit() {
+          if (!courseMmSvg || !window.d3) return;
+          const svg = window.d3.select(courseMmSvg);
+          let hit = svg.select("rect.mm-pan-hit");
+          if (hit.empty()) {
+            hit = svg.insert("rect", ":first-child").attr("class", "mm-pan-hit");
+          }
+          const w = courseMmSvg.clientWidth || courseMmMap?.clientWidth || 800;
+          const h = courseMmSvg.clientHeight || courseMmMap?.clientHeight || 600;
+          hit
+            .attr("x", 0)
+            .attr("y", 0)
+            .attr("width", w)
+            .attr("height", h)
+            .attr("fill", "transparent")
+            .attr("pointer-events", "all");
+        }
+
         function scheduleCourseMindmapRender() {
           clearTimeout(mmRenderTimer);
           mmRenderTimer = setTimeout(function () {
-            renderCourseMindmap(courseMmEditor && courseMmEditor.value);
+            renderCourseMindmap(courseMmEditor && courseMmEditor.value, {
+              skipFit: true,
+            });
           }, 280);
         }
 
@@ -2149,7 +2736,7 @@
             }
             if (!opts.silent) {
               setMmStatus("已保存");
-              showToast("导图大纲已保存");
+              showToast("导图已保存");
             } else {
               setMmStatus("已自动保存");
             }
@@ -2162,6 +2749,9 @@
         async function loadCourseMindmapPane(group) {
           if (!group || !group.id) return;
           setMode("course");
+          mmClearSelection();
+          mmCancelInlineEdit(false);
+          mmCloseContextMenu();
           if (courseMmTitle) courseMmTitle.textContent = group.title || "课程组";
           if (courseMmMeta) {
             courseMmMeta.textContent =
@@ -2192,7 +2782,11 @@
             courseMmEditor.value = md;
           }
           renderCourseMindmap(md);
-          setMmStatus(md.trim() ? "可编辑大纲，或重新生成" : "尚未生成，点「一键生成导图」");
+          setMmStatus(
+            md.trim()
+              ? "可在导图上双击编辑；左侧大纲同步"
+              : "尚未生成，点「一键生成导图」或直接在导图上添加"
+          );
         }
 
         async function generateCourseMindmapUi() {
@@ -2209,6 +2803,7 @@
             );
             if (courseMmEditor) courseMmEditor.value = data.mindmapMd || "";
             if (courseDetails[id]) courseDetails[id].mindmapMd = data.mindmapMd || "";
+            mmClearSelection();
             renderCourseMindmap(data.mindmapMd || "");
             const src =
               data.source === "llm"
@@ -2216,7 +2811,7 @@
                 : data.source === "chunks_outline"
                   ? "已用切块大纲生成（未启用 LLM）"
                   : "已生成";
-            setMmStatus(src + " · " + (data.chunkCount || 0) + " 个切块");
+            setMmStatus(src + " · " + (data.chunkCount || 0) + " 个切块 · 可直接在图上改");
             showToast("导图已生成");
           } catch (err) {
             setMmStatus(err.message || "生成失败");
@@ -3430,6 +4025,8 @@
 
         if (courseMmEditor) {
           courseMmEditor.addEventListener("input", function () {
+            if (mmSkipEditorSync) return;
+            mmClearSelection();
             scheduleCourseMindmapRender();
             scheduleCourseMindmapSave();
             setMmStatus("编辑中…");
@@ -3446,9 +4043,86 @@
             void saveCourseMindmapNow({ silent: false });
           });
         }
+        if (btnMmAddChild) {
+          btnMmAddChild.addEventListener("click", function () {
+            mmAddChild();
+          });
+        }
+        if (btnMmAddSibling) {
+          btnMmAddSibling.addEventListener("click", function () {
+            mmAddSibling();
+          });
+        }
+        if (mmCtx) {
+          mmCtx.addEventListener("click", function (e) {
+            const btn = e.target && e.target.closest ? e.target.closest("[data-mm-act]") : null;
+            if (!btn) return;
+            const act = btn.getAttribute("data-mm-act");
+            mmCloseContextMenu();
+            if (act === "rename") mmStartRename(mmSelectedNode);
+            else if (act === "add-child") mmAddChild(mmSelectedNode);
+            else if (act === "add-sibling") mmAddSibling(mmSelectedNode);
+            else if (act === "delete") mmDeleteNode(mmSelectedNode);
+          });
+        }
+        document.addEventListener("click", function (e) {
+          if (!mmCtx || !mmCtx.classList.contains("open")) return;
+          if (mmCtx.contains(e.target)) return;
+          mmCloseContextMenu();
+        });
+        if (courseMmMap) {
+          courseMmMap.addEventListener("click", function (e) {
+            if (e.target === courseMmSvg || e.target === courseMmMap) {
+              mmClearSelection();
+              mmCloseContextMenu();
+            }
+          });
+        }
 
         document.addEventListener("keydown", function (e) {
+          if (mode === "course" && !mmInlineInput) {
+            const tag = (e.target && e.target.tagName) || "";
+            const typing =
+              tag === "INPUT" ||
+              tag === "TEXTAREA" ||
+              (e.target && e.target.isContentEditable);
+            if (!typing) {
+              if (e.key === "F2" && mmSelectedNode) {
+                e.preventDefault();
+                mmStartRename(mmSelectedNode);
+                return;
+              }
+              if (e.key === "Tab" && mmSelectedNode) {
+                e.preventDefault();
+                mmAddChild(mmSelectedNode);
+                return;
+              }
+              if (
+                (e.key === "Delete" || e.key === "Backspace") &&
+                mmSelectedNode &&
+                !e.metaKey &&
+                !e.ctrlKey
+              ) {
+                e.preventDefault();
+                mmDeleteNode(mmSelectedNode);
+                return;
+              }
+              if (e.key === "Enter" && !e.shiftKey && mmSelectedNode) {
+                e.preventDefault();
+                mmAddSibling(mmSelectedNode);
+                return;
+              }
+            }
+          }
           if (e.key !== "Escape") return;
+          if (mmInlineInput) {
+            mmCancelInlineEdit(false);
+            return;
+          }
+          if (mmCtx && mmCtx.classList.contains("open")) {
+            mmCloseContextMenu();
+            return;
+          }
           if (mode === "edit") {
             document.getElementById("btn-back-preview").click();
           } else if (mode === "preview") {
@@ -3520,12 +4194,13 @@
               if (
                 purgeReason === "switch_push_old" ||
                 purgeReason === "orphan_sweep" ||
+                purgeReason === "orphan_flush" ||
                 purgeReason === "background_purge" ||
                 String(reason).indexOf("switch_push") === 0
               ) {
                 return;
               }
-              showToast("未同步完成，本地数据未删除");
+              showToast("未同步完成，本地数据已保留");
               return;
             }
 
@@ -3545,33 +4220,56 @@
                 showToast("切号失败：未同步完成，仍保留当前账号数据");
                 return;
               }
-              const now = Date.now();
-              if (
-                eventUid &&
-                eventUid === lastKbSwitchUid &&
-                now - lastKbSwitchAt < 8000
-              ) {
-                // 同账号短时间内重复事件：静默刷新列表，不再弹 toast
-                void loadList();
-                void loadCourses();
+              // 首拉未完成：只提示拉取中，不展示空库
+              if (payload && payload.opsReady === false) {
+                showToast("数据拉取中");
                 return;
               }
-              lastKbSwitchUid = eventUid || lastKbSwitchUid;
-              lastKbSwitchAt = now;
-              refreshKnowledgeBaseUi("已切换账号知识库");
-              return;
+              if (kind === "kb_account_ready" && payload && payload.dataPullDone) {
+                // 交给下方 dataPullDone 分支统一刷新
+              } else if (
+                kind === "sync_state" &&
+                status === "local_ready" &&
+                !(payload && payload.opsReady)
+              ) {
+                showToast("数据拉取中");
+                return;
+              } else {
+                const now = Date.now();
+                if (
+                  eventUid &&
+                  eventUid === lastKbSwitchUid &&
+                  now - lastKbSwitchAt < 8000
+                ) {
+                  // 同账号短时间内重复事件：静默刷新列表，不再弹 toast
+                  void loadList();
+                  void loadCourses();
+                  return;
+                }
+                lastKbSwitchUid = eventUid || lastKbSwitchUid;
+                lastKbSwitchAt = now;
+                refreshKnowledgeBaseUi(
+                  kind === "kb_account_ready" ? "数据拉取完成" : "已切换账号知识库"
+                );
+                return;
+              }
             }
 
-            if (kind === "account_purged") {
-              // 旧号后台清除成功：不要刷「已退出」干扰当前账号
+            if (kind === "account_purged" || kind === "account_flushed") {
+              // 旧号后台 flush：不要刷「已退出」干扰当前账号
               if (
                 purgeReason === "switch_push_old" ||
                 purgeReason === "orphan_sweep" ||
+                purgeReason === "orphan_flush" ||
                 purgeReason === "background_purge"
               ) {
                 return;
               }
-              refreshKnowledgeBaseUi("已退出账号，本地知识库已清除");
+              refreshKnowledgeBaseUi(
+                payload && payload.keptLocal === false
+                  ? "已退出账号，本地知识库已清除"
+                  : "已退出登录"
+              );
               return;
             }
 
@@ -3602,10 +4300,52 @@
             if (
               kind === "sync_state" &&
               (status === "syncing_login" ||
-                status === "pulling" ||
                 status === "first_pull_blocked" ||
-                status === "ready")
+                (status === "local_ready" && payload && payload.opsReady === false) ||
+                (status === "pulling" && payload && payload.opsReady === false))
             ) {
+              showToast("数据拉取中");
+              return;
+            }
+            // 后台定时 pull / 已有本地库：不再提示
+            if (kind === "sync_state" && status === "pulling") {
+              return;
+            }
+            if (
+              kind === "sync_state" &&
+              status === "ready" &&
+              payload &&
+              (payload.fromLocal || payload.reason === "local_sqlite_hit")
+            ) {
+              void loadList();
+              void loadCourses();
+              return;
+            }
+            if (
+              (kind === "sync_state" &&
+                status === "ready" &&
+                payload &&
+                payload.dataPullDone &&
+                payload.opsReady) ||
+              (kind === "kb_account_ready" && payload && payload.dataPullDone)
+            ) {
+              const now = Date.now();
+              if (
+                eventUid &&
+                eventUid === lastKbSwitchUid &&
+                now - lastKbSwitchAt < 2000
+              ) {
+                void loadList();
+                void loadCourses();
+                showToast("数据拉取完成");
+                return;
+              }
+              lastKbSwitchUid = eventUid || lastKbSwitchUid;
+              lastKbSwitchAt = now;
+              refreshKnowledgeBaseUi("数据拉取完成");
+              return;
+            }
+            if (kind === "sync_state" && status === "ready") {
               return;
             }
           });

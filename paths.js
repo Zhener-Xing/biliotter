@@ -73,11 +73,8 @@ function ensureEnvFile() {
     const isPlaceholder = (key, val) => {
       if (!val) return true;
       if (key === 'LLM_API_KEY') {
-        return (
-          /^sk-your-/i.test(val) ||
-          val === 'your-api-key-here' ||
-          val === 'CHANGE_ME'
-        );
+        // 任何非空 key 都不从 example 自动灌入（防止把厂商 key 打进用户机）
+        return true;
       }
       return false;
     };
@@ -104,7 +101,8 @@ function ensureEnvFile() {
 
     fillBlank('CLOUD_API_BASE');
     fillBlank('CLOUD_DEVICE_SECRET');
-    fillBlank('LLM_API_KEY');
+    fillBlank('LLM_USE_CLOUD_PROXY');
+    // 故意不 fillBlank LLM_API_KEY
 
     if (changed) fs.writeFileSync(dest, text, 'utf8');
   } catch (err) {

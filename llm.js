@@ -24,14 +24,7 @@ async function chatCompletion({
   temperature,
   _attempt = 0,
 } = {}) {
-  const apiKey = String(process.env.LLM_API_KEY || '').trim();
-  const base = String(process.env.LLM_API_BASE || 'https://api.openai.com/v1').replace(
-    /\/$/,
-    ''
-  );
-  const model = String(process.env.LLM_MODEL || 'gpt-4o-mini').trim();
   const waitMs = timeoutMs ?? envInt('LLM_TIMEOUT_MS', 20000);
-  // JSON 任务用更低温度：少跑偏、少重试，整体更快
   const temp =
     Number.isFinite(Number(temperature))
       ? Number(temperature)
@@ -39,8 +32,14 @@ async function chatCompletion({
         ? 0.28
         : 0.6;
 
-  if (!apiKey) {
-    throw new Error('缺少 LLM_API_KEY（请复制 .env.example 为 .env 并填写）');
+  const route = resolveLlmRoute();
+  if (route.mode === 'proxy' && !route.token) {
+    throw new Error('AI 走云端代理时需要先登录（缺少云端 token）');
+  }
+  if (route.mode === 'direct' && !route.apiKey) {
+    throw new Error(
+      '缺少 LLM_API_KEY。分发版请配置 CLOUD_API_BASE 并开启 LLM_USE_CLOUD_PROXY；本地开发可在 .env 填 key，或设 LLM_DIRECT=true'
+    );
   }
 
   const controller = new AbortController();
@@ -48,7 +47,8 @@ async function chatCompletion({
 
   try {
     const body = {
-      model,
+      // 直连时由客户端指定模型；代理模式下服务器会强制使用自己的 LLM_MODEL
+      model: route.model,
       temperature: temp,
       max_tokens,
       messages,
@@ -57,19 +57,34 @@ async function chatCompletion({
       body.response_format = { type: 'json_object' };
     }
 
-    const res = await fetch(`${base}/chat/completions`, {
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${route.mode === 'proxy' ? route.token : route.apiKey}`,
+    };
+
+    const res = await fetch(route.url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const detail = data?.error?.message || data?.message || res.statusText;
+      const detail =
+        data?.error?.message ||
+        data?.error ||
+        data?.message ||
+        data?.detail ||
+        res.statusText;
+      if (
+        route.mode === 'proxy' &&
+        res.status === 404
+      ) {
+        throw new Error(
+          '云端还没有 LLM 代理接口（404）。请在服务器更新 cloud-api 并 pm2 restart；health 应返回 llmProxy:true'
+        );
+      }
       if (jsonMode && res.status === 400 && /response_format|json_object/i.test(String(detail))) {
         clearTimeout(timer);
         return chatCompletion({
@@ -81,7 +96,6 @@ async function chatCompletion({
           _attempt,
         });
       }
-      // 限流/过载：短暂退避后重试一次
       if (_attempt < 1 && (res.status === 429 || res.status >= 500)) {
         clearTimeout(timer);
         await new Promise((r) => setTimeout(r, 180 + Math.random() * 220));
@@ -99,7 +113,6 @@ async function chatCompletion({
 
     const choice = data?.choices?.[0];
     let text = choice?.message?.content;
-    // 部分接口会返回 content 数组（多段）
     if (Array.isArray(text)) {
       text = text
         .map((part) => (typeof part === 'string' ? part : part?.text || ''))
@@ -109,7 +122,6 @@ async function chatCompletion({
     if (!text) {
       const reason = choice?.finish_reason || choice?.finishReason || '';
       const refusal = choice?.message?.refusal || data?.error?.message || '';
-      // 空内容常见于并发过载/代理抖动：重试一次
       if (_attempt < 1) {
         clearTimeout(timer);
         await new Promise((r) => setTimeout(r, 160 + Math.random() * 200));
@@ -132,8 +144,13 @@ async function chatCompletion({
     if (err?.name === 'AbortError') {
       throw new Error(`LLM 请求超时（>${waitMs}ms）`);
     }
-    
-    if (err instanceof Error && /^LLM HTTP |无法连接 LLM|缺少 LLM_API_KEY|LLM 返回空|LLM 请求超时/.test(err.message)) {
+
+    if (
+      err instanceof Error &&
+      /^LLM HTTP |无法连接 LLM|缺少 LLM_API_KEY|AI 走云端|LLM 返回空|LLM 请求超时/.test(
+        err.message
+      )
+    ) {
       throw err;
     }
     const cause = err?.cause;
@@ -143,13 +160,77 @@ async function chatCompletion({
       .join(' | ');
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT') {
       throw new Error(
-        `无法连接 LLM 接口（${detail}）。请检查 .env 里 LLM_API_BASE 是否可访问`
+        `无法连接 LLM 接口（${detail}）。请检查 CLOUD_API_BASE / LLM_API_BASE 是否可访问`
       );
     }
     throw new Error(detail || String(err));
   } finally {
     clearTimeout(timer);
   }
+}
+
+function cloudApiBase() {
+  return String(process.env.CLOUD_API_BASE || '')
+    .trim()
+    .replace(/\/+$/, '');
+}
+
+function loadCloudTokenLazy() {
+  try {
+    const { loadToken } = require('./cloud-sync');
+    return loadToken();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 默认：有 CLOUD_API_BASE 且未强制直连 → 走后方代理（key 在服务器）。
+ * 本地调试：LLM_DIRECT=true + LLM_API_KEY，或 LLM_USE_CLOUD_PROXY=false。
+ */
+function resolveLlmRoute() {
+  const cloudBase = cloudApiBase();
+  const localKey = String(process.env.LLM_API_KEY || '').trim();
+  const localBase = String(
+    process.env.LLM_API_BASE || 'https://api.openai.com/v1'
+  ).replace(/\/+$/, '');
+  const model = String(process.env.LLM_MODEL || 'gpt-4o-mini').trim();
+  const forceDirect = envFlag('LLM_DIRECT', false);
+  // 未设置时：有云端则默认走代理
+  const useProxyEnv = String(process.env.LLM_USE_CLOUD_PROXY ?? '').trim();
+  const useProxy =
+    useProxyEnv === ''
+      ? Boolean(cloudBase)
+      : envFlag('LLM_USE_CLOUD_PROXY', true);
+
+  if (forceDirect && localKey) {
+    return {
+      mode: 'direct',
+      url: `${localBase}/chat/completions`,
+      apiKey: localKey,
+      model,
+      token: null,
+    };
+  }
+
+  if (useProxy && cloudBase) {
+    const session = loadCloudTokenLazy();
+    return {
+      mode: 'proxy',
+      url: `${cloudBase}/llm/chat/completions`,
+      apiKey: null,
+      model,
+      token: session?.token || null,
+    };
+  }
+
+  return {
+    mode: 'direct',
+    url: `${localBase}/chat/completions`,
+    apiKey: localKey,
+    model,
+    token: null,
+  };
 }
 
 async function completeTask(taskId, userContent, opts = {}) {

@@ -11,6 +11,7 @@ module.exports = {
 5. 若 userBodyMd 与 previousAiMd 皆空，再根据字幕从零写简洁补充。
 6. 只依据提供材料，禁止编造；广告忽略。
 7. ai_md 用短列表与 ## 小标题；公式 $...$ / $$...$$；控制在必要篇幅，勿注水。
+8. 若存在previousAiMd，则基于previousAiMd和userBodyMd生成ai_md，否则基于userBodyMd生成ai_md，不得推翻previousAiMd，可以进行格式整理。
 
 只输出 JSON（无围栏、无其它说明）：
 {"title":"无标题时填写否则空串","ai_md":"仅 AI 补充 Markdown"}`,

@@ -47,6 +47,9 @@ function requireBoundAccount() {
   if (!uid || !acc.sessionLoggedIn) {
     return { ok: false, error: 'not_bound' };
   }
+  if (!isAccountOpsReady()) {
+    return { ok: false, error: 'syncing' };
+  }
   return { ok: true, uid };
 }
 

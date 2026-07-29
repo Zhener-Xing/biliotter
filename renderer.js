@@ -72,16 +72,37 @@ let danceCapTimer = null;
 const GATE_MESSAGES = {
   extension_offline: '浏览器插件未在线，请打开扩展并保持 B 站登录',
   not_bound: '请先登录 B 站账号',
-  syncing: '正在同步知识库，请稍候…',
+  syncing: '数据拉取中',
+  pulling: '数据拉取中',
   waiting_auth: '正在用 B 站登录态连接云端…',
   waiting_auth_uid_match: '正在用 B 站登录态连接云端…',
   waiting_cookie: '请打开已登录的 bilibili.com，以便同步知识库',
   auth_failed: '云端鉴权失败，请刷新 B 站登录后重试',
   not_logged_in: '云端鉴权失败，请刷新 B 站登录后重试',
-  pull_timeout: '云端同步超时，正在重试…',
-  pull_error: '云端同步失败，正在重试…',
+  pull_timeout: '数据拉取中',
+  pull_error: '数据拉取中',
+  first_pull_blocked: '数据拉取中',
   cloud_disabled: '未配置云端，无法使用好友功能',
 };
+
+let dataPullWinPlayedForUid = null;
+/** 当前 uid 的云端首拉已完成（之后后台定时 pull 不再提示「数据拉取中」） */
+let cloudPullReadyUid = null;
+
+function hidePetBubble() {
+  if (!petBubble) return;
+  petBubble.hidden = true;
+  if (bubbleTimer) {
+    clearTimeout(bubbleTimer);
+    bubbleTimer = null;
+  }
+}
+
+function isAwaitingCloudPull(uid = '') {
+  const id = String(uid || '');
+  if (!id) return cloudPullReadyUid == null;
+  return cloudPullReadyUid !== id;
+}
 
 function showPetBubble(text, ms = BUBBLE_MS) {
   if (!petBubble) return;
@@ -461,19 +482,64 @@ function handleEvent(payload) {
       break;
     }
 
-    case 'kb_account_ready':
-      stopDanceBuffer();
-      break;
-
     case 'account_switched':
       stopDanceBuffer();
       break;
 
     case 'sync_state': {
-      if (payload.status === 'local_ready' || payload.status === 'account_switched') {
+      const status = String(payload.status || '');
+      const uid = String(payload.uid || '');
+      const awaiting = isAwaitingCloudPull(uid);
+      // 仅云端首拉（本地无该 uid 库、知识库尚不可进）时提示；已有本地库或后台 pull 不再挡
+      if (
+        awaiting &&
+        payload.opsReady === false &&
+        (status === 'syncing_login' ||
+          status === 'switching' ||
+          status === 'pulling' ||
+          status === 'first_pull_blocked' ||
+          status === 'local_ready')
+      ) {
+        if (uid) dataPullWinPlayedForUid = null;
+        showPetBubble('数据拉取中', 12000);
+      } else if (
+        status === 'ready' &&
+        payload.dataPullDone &&
+        payload.opsReady
+      ) {
+        if (uid) cloudPullReadyUid = uid;
+        // 命中本地库：直接可用，不弹「数据拉取中/完成」
+        if (payload.fromLocal || payload.reason === 'local_sqlite_hit') {
+          hidePetBubble();
+          stopDanceBuffer();
+        } else if (!payload.background || payload.pulled) {
+          hidePetBubble();
+          showPetBubble('数据拉取完成', 3500);
+          if (uid && dataPullWinPlayedForUid !== uid) {
+            dataPullWinPlayedForUid = uid;
+            playSfx('assets/noise/win.mp3');
+          }
+          stopDanceBuffer();
+        }
+      } else if (status === 'local_ready' || status === 'account_switched') {
         stopDanceBuffer();
       } else if (shouldStopAccountBuffer(payload)) {
         stopDanceBuffer();
+      }
+      break;
+    }
+
+    case 'kb_account_ready': {
+      stopDanceBuffer();
+      const uid = String(payload.uid || '');
+      if (payload.dataPullDone && uid) {
+        cloudPullReadyUid = uid;
+        if (dataPullWinPlayedForUid !== uid) {
+          dataPullWinPlayedForUid = uid;
+          hidePetBubble();
+          showPetBubble('数据拉取完成', 3500);
+          playSfx('assets/noise/win.mp3');
+        }
       }
       break;
     }
@@ -498,6 +564,8 @@ function handleEvent(payload) {
     case 'account_logout':
     case 'account_logged_out':
       setWatching(false);
+      dataPullWinPlayedForUid = null;
+      cloudPullReadyUid = null;
       showPetBubble('已退出登录');
       break;
 
@@ -513,6 +581,7 @@ function handleEvent(payload) {
       if (
         purgeReason === 'switch_push_old' ||
         purgeReason === 'orphan_sweep' ||
+        purgeReason === 'orphan_flush' ||
         purgeReason === 'background_purge' ||
         purgeReason.includes('switch_push')
       ) {

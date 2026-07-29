@@ -41,38 +41,139 @@ function extractMindmapMd(raw) {
   return '';
 }
 
-function outlineFromChunks(group, chunks) {
-  const lines = [`# ${group.title || '课程组'}`];
-  if (group.topic) lines.push(`## ${group.topic}`);
+const VIDEO_NOISE_RE =
+  /(一个视频讲透彻?|一站式讲解|彻底吃透|建议收藏|高清完整版|附讲义|讲义|同步全集|一轮总复习|二轮复习|完整版|必看|干货|人教A?版|高考冲刺|名师|免费领取|点击收藏|记得三连)/g;
 
-  const byBvid = new Map();
-  for (const c of chunks) {
-    const bv = c.bvid || 'unknown';
-    if (!byBvid.has(bv)) byBvid.set(bv, []);
-    byBvid.get(bv).push(c);
+function cleanNodeLabel(raw, { maxLen = 24 } = {}) {
+  let s = String(raw || '')
+    .replace(/^#+\s*/, '')
+    .replace(/[【\[][^】\]]*[】\]]/g, ' ')
+    .replace(VIDEO_NOISE_RE, ' ')
+    .replace(/BV[\w]+/gi, ' ')
+    .replace(/\bav\d+\b/gi, ' ')
+    .replace(/bili-?pet/gi, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/[!！?？.。,，;；:：|｜&＆]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return '';
+  if (s.length > maxLen) {
+    s = s.slice(0, maxLen).replace(/\s+\S*$/, '').trim() || s.slice(0, maxLen);
+  }
+  return s;
+}
+
+/** 去掉导图里的视频印记 / BV / 营销标题化节点 */
+function sanitizeMindmapMd(md, groupTitle = '') {
+  const rootTitle =
+    cleanNodeLabel(groupTitle, { maxLen: 24 }) ||
+    String(groupTitle || '').trim() ||
+    '课程组';
+  const lines = String(md || '').replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let sawRoot = false;
+
+  for (const line of lines) {
+    const m = line.match(/^(#{1,6})\s+(.*)$/);
+    if (!m) {
+      const t = String(line || '').trim();
+      if (!t) continue;
+      if (/bili-?pet|BV[\w]+/i.test(t)) continue;
+      continue;
+    }
+    const level = m[1].length;
+    let title = String(m[2] || '')
+      .replace(/\(\s*BV[\w]+\s*\)/gi, '')
+      .replace(/BV[\w]+/gi, '')
+      .replace(/bili-?pet/gi, '')
+      .replace(/^\s*<\s*-+\s*/g, '')
+      .trim();
+    title = cleanNodeLabel(title, { maxLen: level <= 2 ? 16 : 20 });
+    if (!title) continue;
+    if (level === 1) {
+      if (sawRoot) continue;
+      sawRoot = true;
+      out.push(`# ${rootTitle}`);
+      continue;
+    }
+    out.push(`${'#'.repeat(level)} ${title}`);
   }
 
-  for (const [bvid, list] of byBvid) {
-    const item = (group.items || []).find((i) => i.bvid === bvid);
-    lines.push(`## ${item?.title || bvid}`);
+  if (!sawRoot) out.unshift(`# ${rootTitle}`);
+  // 去重：同级连续同名合并
+  const deduped = [];
+  const seenAtDepth = new Map();
+  for (const line of out) {
+    const m = line.match(/^(#{1,6})\s+(.*)$/);
+    if (!m) continue;
+    const depth = m[1].length;
+    const key = `${depth}::${m[2]}`;
+    // 重置更深层级的 seen（进入新分支）
+    for (const d of [...seenAtDepth.keys()]) {
+      if (d > depth) seenAtDepth.delete(d);
+    }
+    if (seenAtDepth.get(depth) === m[2] && depth > 1) continue;
+    // 全局同名 ## 去重（知识模块不应重复）
+    if (depth === 2) {
+      const modKey = `mod::${m[2]}`;
+      if (seenAtDepth.get(modKey)) continue;
+      seenAtDepth.set(modKey, true);
+    }
+    seenAtDepth.set(depth, m[2]);
+    deduped.push(line);
+  }
+  return `${deduped.join('\n')}\n`;
+}
+
+function outlineFromChunks(group, chunks) {
+  const lines = [`# ${cleanNodeLabel(group.title, { maxLen: 24 }) || group.title || '课程组'}`];
+
+  const byTopic = new Map();
+  for (const c of chunks) {
+    let topic = cleanNodeLabel(c.heading, { maxLen: 16 });
+    if (!topic) {
+      const first = String(c.text || '')
+        .split('\n')
+        .map((s) => s.trim())
+        .find(Boolean);
+      topic = cleanNodeLabel(first, { maxLen: 16 });
+    }
+    if (!topic) topic = '要点';
+    if (!byTopic.has(topic)) byTopic.set(topic, []);
+    byTopic.get(topic).push(c);
+  }
+
+  const topics = [...byTopic.entries()].slice(0, 12);
+  for (const [topic, list] of topics) {
+    lines.push(`## ${topic}`);
     const seen = new Set();
     for (const c of list) {
-      let heading = String(c.heading || '').trim();
-      if (!heading) {
-        const first = String(c.text || '')
-          .split('\n')
-          .map((s) => s.trim())
-          .find(Boolean);
-        heading = first ? first.slice(0, 40) : '';
+      const fromText = String(c.text || '')
+        .split(/[\n。；;]/)
+        .map((s) => cleanNodeLabel(s, { maxLen: 20 }))
+        .filter(Boolean);
+      for (const point of fromText) {
+        if (point === topic || seen.has(point)) continue;
+        seen.add(point);
+        lines.push(`### ${point}`);
+        if (seen.size >= 6) break;
       }
-      heading = heading.replace(/^#+\s*/, '').trim();
-      if (!heading || seen.has(heading)) continue;
-      seen.add(heading);
-      lines.push(`### ${heading} (${bvid})`);
-      if (seen.size >= 8) break;
+      if (seen.size >= 6) break;
     }
   }
-  return `${lines.join('\n')}\n`;
+  return sanitizeMindmapMd(`${lines.join('\n')}\n`, group.title);
+}
+
+function scrubChunkText(text, maxLen = 500) {
+  return String(text || '')
+    .replace(/BV[\w]+/gi, ' ')
+    .replace(/\bav\d+\b/gi, ' ')
+    .replace(/bili-?pet/gi, ' ')
+    .replace(VIDEO_NOISE_RE, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
 }
 
 async function generateCourseMindmap(groupId) {
@@ -94,12 +195,15 @@ async function generateCourseMindmap(groupId) {
 
   const { group, chunks } = packed;
   const prev = getCourseMindmap(groupId);
-  const previousMindmapMd = prev.ok ? String(prev.mindmapMd || '').trim() : '';
+  const previousMindmapMd = prev.ok
+    ? sanitizeMindmapMd(String(prev.mindmapMd || '').trim(), group.title)
+    : '';
 
-  const noteChunks = chunks.map((c) => ({
-    bvid: c.bvid,
-    heading: c.heading || '',
-    text: String(c.text || '').slice(0, 500),
+  // 不传 bvid / 原始视频标题，避免模型按视频分叉或标注 BV
+  const noteChunks = chunks.map((c, i) => ({
+    noteIndex: i + 1,
+    heading: cleanNodeLabel(c.heading, { maxLen: 20 }),
+    text: scrubChunkText(c.text, 500),
   }));
 
   let mindmapMd = '';
@@ -119,10 +223,10 @@ async function generateCourseMindmap(groupId) {
             topic: group.topic,
             itemCount: group.itemCount,
           },
-          previousMindmapMd,
+          previousMindmapMd: previousMindmapMd || undefined,
           noteChunks,
           instruction:
-            '根据 noteChunks 生成 Markmap 可用的 mindmap_md 大纲；有 previousMindmapMd 则增量修订。',
+            '按知识模块生成 mindmap_md：## 为模块名，### 为短知识点；禁止视频标题、禁止任何 BV/来源标注；跨笔记合并相同知识点；旧稿若按视频分叉必须改写。',
         },
         { max_tokens: 2500, timeoutMs: 90000, jsonMode: true }
       );
@@ -138,8 +242,10 @@ async function generateCourseMindmap(groupId) {
     }
   }
 
+  mindmapMd = sanitizeMindmapMd(mindmapMd, group.title);
   if (!mindmapMd.trim().startsWith('#')) {
     mindmapMd = `# ${group.title}\n\n${mindmapMd}`.trim() + '\n';
+    mindmapMd = sanitizeMindmapMd(mindmapMd, group.title);
   }
 
   const saved = saveCourseMindmap(groupId, mindmapMd);
@@ -159,5 +265,6 @@ async function generateCourseMindmap(groupId) {
 module.exports = {
   generateCourseMindmap,
   outlineFromChunks,
+  sanitizeMindmapMd,
+  cleanNodeLabel,
 };
-//AI维护的思维导图代码文件

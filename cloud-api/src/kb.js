@@ -106,6 +106,23 @@ async function handleKbPush(req, res) {
     for (const n of notes) {
       const bvid = String(n.bvid || '').trim();
       if (!bvid) continue;
+      const isDeleted =
+        n.deleted === true ||
+        n.deleted === 1 ||
+        n.deleted === '1' ||
+        n.deleted_at != null ||
+        n.deletedAt != null;
+      if (isDeleted) {
+        await conn.execute('DELETE FROM note_chunks WHERE uid = ? AND bvid = ?', [
+          uid,
+          bvid,
+        ]);
+        await conn.execute('DELETE FROM cornell_notes WHERE uid = ? AND bvid = ?', [
+          uid,
+          bvid,
+        ]);
+        continue;
+      }
       const updatedAt = Number(n.updatedAt ?? n.updated_at) || Date.now();
       const createdAt = Number(n.createdAt ?? n.created_at) || updatedAt;
       await conn.execute(
@@ -196,6 +213,27 @@ async function handleKbPush(req, res) {
     for (const g of courseGroups) {
       const id = String(g.id || '').trim();
       if (!id) continue;
+      const isDeleted =
+        g.deleted === true ||
+        g.deleted === 1 ||
+        g.deleted === '1' ||
+        g.deleted_at != null ||
+        g.deletedAt != null;
+      if (isDeleted) {
+        await conn.execute(
+          'DELETE FROM course_group_items WHERE uid = ? AND group_id = ?',
+          [uid, id]
+        );
+        await conn.execute(
+          'DELETE FROM course_group_folders WHERE uid = ? AND group_id = ?',
+          [uid, id]
+        );
+        await conn.execute('DELETE FROM course_groups WHERE uid = ? AND id = ?', [
+          uid,
+          id,
+        ]);
+        continue;
+      }
       const updatedAt = Number(g.updatedAt ?? g.updated_at) || Date.now();
       await conn.execute(
         `
@@ -228,6 +266,24 @@ async function handleKbPush(req, res) {
 
     for (const f of courseFolders) {
       const id = String(f.id || '').trim();
+      const isDeleted =
+        f.deleted === true ||
+        f.deleted === 1 ||
+        f.deleted === '1' ||
+        f.deleted_at != null ||
+        f.deletedAt != null;
+      if (isDeleted) {
+        if (!id) continue;
+        await conn.execute(
+          'UPDATE course_group_items SET folder_id = NULL WHERE uid = ? AND folder_id = ?',
+          [uid, id]
+        );
+        await conn.execute(
+          'DELETE FROM course_group_folders WHERE uid = ? AND id = ?',
+          [uid, id]
+        );
+        continue;
+      }
       const groupId = String(f.groupId ?? f.group_id ?? '').trim();
       if (!id || !groupId) continue;
       const updatedAt = Number(f.updatedAt ?? f.updated_at) || Date.now();
@@ -259,6 +315,19 @@ async function handleKbPush(req, res) {
       const groupId = String(it.groupId ?? it.group_id ?? '').trim();
       const bvid = String(it.bvid || '').trim();
       if (!groupId || !bvid) continue;
+      const isDeleted =
+        it.deleted === true ||
+        it.deleted === 1 ||
+        it.deleted === '1' ||
+        it.deleted_at != null ||
+        it.deletedAt != null;
+      if (isDeleted) {
+        await conn.execute(
+          'DELETE FROM course_group_items WHERE uid = ? AND group_id = ? AND bvid = ?',
+          [uid, groupId, bvid]
+        );
+        continue;
+      }
       await conn.execute(
         `
         INSERT INTO course_group_items

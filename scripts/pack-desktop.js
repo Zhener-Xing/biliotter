@@ -124,6 +124,53 @@ function copyBridge(resourcesDir) {
   return dest;
 }
 
+const GUIDE_NAME = 'BiliOtter使用与安装指南.md';
+
+function copyUserGuide(destDir) {
+  const src = path.join(root, GUIDE_NAME);
+  if (!fs.existsSync(src)) {
+    console.warn(`[pack] missing ${GUIDE_NAME}`);
+    return null;
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  const dest = path.join(destDir, GUIDE_NAME);
+  fs.copyFileSync(src, dest);
+  return dest;
+}
+
+/** 安装包根目录再放一份扩展 zip + 指南，方便用户直接解压使用 */
+function finalizeDistBundle(outDir, resourcesDir) {
+  const guideTop = copyUserGuide(outDir);
+  if (resourcesDir) copyUserGuide(resourcesDir);
+
+  const bridgeZip = path.join(outRoot, 'bili-pet-bridge.zip');
+  if (fs.existsSync(bridgeZip)) {
+    fs.copyFileSync(bridgeZip, path.join(outDir, 'bili-pet-bridge.zip'));
+  } else {
+    console.warn('[pack] bili-pet-bridge.zip missing — run npm run pack:ext first');
+  }
+
+  // 简明说明（双击就能看）
+  const readmeTxt = path.join(outDir, '请先读我.txt');
+  fs.writeFileSync(
+    readmeTxt,
+    [
+      'BiliOtter 安装包',
+      '',
+      '1. 先打开本文件夹里的「BiliOtter使用与安装指南.md」按步骤安装。',
+      '2. 桌宠：Mac 打开 BiliOtter.app；Windows 打开 BiliOtter.exe。',
+      '3. 浏览器扩展：解压 bili-pet-bridge.zip，在 Chrome/Edge 开发者模式下「加载已解压的扩展程序」。',
+      '4. 打开 bilibili.com 并登录，保持扩展启用。',
+      '',
+      '详细说明见：BiliOtter使用与安装指南.md',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+
+  return { guideTop, readmeTxt };
+}
+
 function injectAppIntoResources(resourcesDir) {
   try {
     fs.rmSync(path.join(resourcesDir, 'default_app.asar'), { force: true });
@@ -274,7 +321,7 @@ function packMacFromLocal(outDir) {
     console.warn('[pack] codesign failed (app may need right-click Open):', err.message);
   }
 
-  return { destApp, bridge };
+  return { destApp, bridge, resources };
 }
 
 function packWinFromDist(electronDist, outDir) {
@@ -303,7 +350,7 @@ function packWinFromDist(electronDist, outDir) {
   const to = path.join(outDir, 'BiliOtter.exe');
   if (fs.existsSync(from)) fs.renameSync(from, to);
 
-  return { destApp: path.join(outDir, 'BiliOtter.exe'), bridge };
+  return { destApp: path.join(outDir, 'BiliOtter.exe'), bridge, resources };
 }
 
 function packLinuxFromDist(electronDist, outDir) {
@@ -314,7 +361,7 @@ function packLinuxFromDist(electronDist, outDir) {
   const from = path.join(outDir, 'electron');
   const to = path.join(outDir, 'BiliOtter');
   if (fs.existsSync(from)) fs.renameSync(from, to);
-  return { destApp: to, bridge };
+  return { destApp: to, bridge, resources };
 }
 
 async function main() {
@@ -349,18 +396,32 @@ async function main() {
     const destApp = path.join(outDir, 'BiliOtter.app');
     copyAppBundle(path.join(dist, 'Electron.app'), destApp);
     const bridge = injectAppIntoResources(path.join(destApp, 'Contents', 'Resources'));
-    result = { destApp, bridge };
+    result = {
+      destApp,
+      bridge,
+      resources: path.join(destApp, 'Contents', 'Resources'),
+    };
   } else {
     throw new Error(`unsupported platform ${platform}`);
   }
 
+  const extras = finalizeDistBundle(outDir, result.resources);
   console.log('Wrote', outDir);
   console.log('  app:', result.destApp);
   console.log('  bridge:', result.bridge);
+  if (extras.guideTop) console.log('  guide:', extras.guideTop);
+  if (extras.readmeTxt) console.log('  readme:', extras.readmeTxt);
 
-  const wantZip = opts.zip || platform === 'win32';
+  // 分发包一律打成 zip：Mac / Windows 各一个安装包
+  const wantZip = opts.zip || platform === 'win32' || platform === 'darwin';
   if (wantZip) {
-    const zipPath = path.join(outRoot, `BiliOtter-${platform}-${arch}.zip`);
+    const zipName =
+      platform === 'darwin'
+        ? `BiliOtter-macOS-${arch}.zip`
+        : platform === 'win32'
+          ? `BiliOtter-Windows-x64.zip`
+          : `BiliOtter-${platform}-${arch}.zip`;
+    const zipPath = path.join(outRoot, zipName);
     zipFolder(outDir, zipPath);
     console.log('Wrote', zipPath);
   }

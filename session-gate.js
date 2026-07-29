@@ -41,9 +41,11 @@ function gateMessage(error) {
     case 'cloud_disabled':
       return '未配置云端，无法使用好友功能';
     case 'syncing':
+    case 'pulling':
     case 'pull_timeout':
     case 'pull_error':
-      return '正在同步知识库，请稍候…';
+    case 'first_pull_blocked':
+      return '数据拉取中';
     case 'not_bound':
     default:
       return '请先登录 B 站账号';

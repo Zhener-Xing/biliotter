@@ -16,6 +16,7 @@ const {
   hasLocalKbData,
   dbPathForUid,
   listUidDbFilesOnDisk,
+  markAllCourseStructurePending,
 } = require('./notes-db');
 const { setAccountOpsReady, isAccountOpsReady, setForeignPurgeActive } = require('./session-gate');
 const { getBiliCookieHeader } = require('./bili-web-api');
@@ -518,24 +519,30 @@ function scheduleFirstPullRetry(uid, cookieHeader = null) {
     firstPullRetryTimers.delete(id);
     if (getActiveUid() !== id) return;
     void (async () => {
-      // 后台重试：不要关掉本地可用性
-      emitSyncState('syncing_login', { uid: id, reason: 'first_pull_retry' });
+      emitSyncState('syncing_login', { uid: id, reason: 'first_pull_retry', opsReady: false });
       const result = await runFirstPullGate({
         uid: id,
         cookieHeader: resolveCookieHeader(cookieHeader),
         pullReason: 'login_pull_retry',
       });
+      if (getActiveUid() !== id) return;
       if (result.ok) {
+        setAccountOpsReady(true);
         emitSyncState('ready', {
           reason: result.pulled ? 'pull_ok' : result.reason || 'bg_sync_ok',
           uid: id,
           retried: true,
+          opsReady: true,
+          dataPullDone: true,
+          pulled: Boolean(result.pulled),
         });
       } else {
+        setAccountOpsReady(false);
         emitSyncState('first_pull_blocked', {
           uid: id,
           error: result.error,
           reason: result.reason || result.error,
+          opsReady: false,
         });
         scheduleFirstPullRetry(id, resolveCookieHeader(cookieHeader));
       }
@@ -611,14 +618,14 @@ async function runFirstPullGate({
   return { ok: true, uid: id, pulled: true, reason: decision.reason };
 }
 
-async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false } = {}) {
+async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false, purgeLocal = false } = {}) {
   const id = String(uid || '').trim();
   if (!id) return { ok: true, skipped: true, reason: 'no_uid' };
 
   const emitBlocked = (extra) => {
     if (quiet) {
       console.warn(
-        '[bili-pet] purge blocked (quiet)',
+        '[bili-pet] flush blocked (quiet)',
         id,
         extra?.reason || extra?.error || reason
       );
@@ -631,9 +638,13 @@ async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false } = {}) {
     });
   };
 
+  // 未配云端：保留本地库，直接成功（不再因 cloud_disabled 卡住退出）
   if (!cloudEnabled()) {
-    emitBlocked({ reason: 'cloud_disabled' });
-    return { ok: false, error: 'cloud_disabled' };
+    if (purgeLocal) {
+      emitBlocked({ reason: 'cloud_disabled' });
+      return { ok: false, error: 'cloud_disabled' };
+    }
+    return { ok: true, uid: id, skipped: true, reason: 'cloud_disabled_keep_local', keptLocal: true };
   }
 
   return withDbMutex(async () => {
@@ -642,16 +653,29 @@ async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false } = {}) {
     const session = loadTokenForUid(id) || (resumeUid === id ? loadToken() : null);
     const remountingOther = Boolean(resumeUid && resumeUid !== id);
 
+    // 无 token：仍保留本地；退出流程不应因此反复重试删库
     if (!session?.token) {
-      emitBlocked({ reason: 'no_token' });
-      return { ok: false, error: 'no_token' };
+      if (purgeLocal) {
+        emitBlocked({ reason: 'no_token' });
+        return { ok: false, error: 'no_token' };
+      }
+      return { ok: true, uid: id, skipped: true, reason: 'no_token_keep_local', keptLocal: true };
     }
     if (session.uid !== id) {
-      emitBlocked({
-        reason: 'token_uid_mismatch',
-        tokenUid: session.uid,
-      });
-      return { ok: false, error: 'token_uid_mismatch' };
+      if (purgeLocal) {
+        emitBlocked({
+          reason: 'token_uid_mismatch',
+          tokenUid: session.uid,
+        });
+        return { ok: false, error: 'token_uid_mismatch' };
+      }
+      return {
+        ok: true,
+        uid: id,
+        skipped: true,
+        reason: 'token_uid_mismatch_keep_local',
+        keptLocal: true,
+      };
     }
 
     if (remountingOther) setForeignPurgeActive(true);
@@ -662,6 +686,12 @@ async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false } = {}) {
         setActiveUid(id);
       }
       saveToken(session);
+
+      try {
+        markAllCourseStructurePending();
+      } catch {
+        /* ignore */
+      }
 
       let pushResult = await pushPending({ reason, tokenSession: session });
       if (pushResult.skipped && pushResult.reason === 'busy') {
@@ -681,23 +711,38 @@ async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false } = {}) {
         return { ok: false, error: 'pending_remaining' };
       }
 
-      const purged = purgeUidLocalStore(id);
-      if (!purged.ok) {
-        emitBlocked({ reason: purged.error || 'purge_failed' });
-        return { ok: false, error: purged.error || 'purge_failed' };
+      // 默认保留本地 SQLite，避免每次退出后再全量云端拉取
+      if (purgeLocal) {
+        const purged = purgeUidLocalStore(id);
+        if (!purged.ok) {
+          emitBlocked({ reason: purged.error || 'purge_failed' });
+          return { ok: false, error: purged.error || 'purge_failed' };
+        }
+        clearTokenForUid(id);
+        if (!quiet) {
+          emitSyncState('account_purged', { uid: id, purgeReason: reason, keptLocal: false });
+        } else {
+          console.log(`[bili-pet] background purged uid=${id} (${reason})`);
+        }
+        return { ok: true, uid: id, keptLocal: false };
       }
 
-      clearTokenForUid(id);
       if (!quiet) {
-        emitSyncState('account_purged', { uid: id, purgeReason: reason });
+        emitSyncState('account_flushed', {
+          uid: id,
+          purgeReason: reason,
+          keptLocal: true,
+        });
       } else {
-        console.log(`[bili-pet] background purged uid=${id} (${reason})`);
+        console.log(`[bili-pet] background flushed uid=${id} (keep local, ${reason})`);
       }
-      return { ok: true, uid: id };
+      return { ok: true, uid: id, keptLocal: true };
     } finally {
       if (resumeUid && resumeUid !== id) {
         setActiveUid(resumeUid);
         if (resumeToken?.token) saveToken(resumeToken);
+      } else if (!resumeUid || resumeUid === id) {
+        // 退出场景：调用方会 clearBinding；此处若仍挂着该 uid，由调用方卸挂
       }
       if (remountingOther) setForeignPurgeActive(false);
     }
@@ -754,7 +799,7 @@ function scheduleBackgroundPurge(uid, reason = 'background_purge') {
       PURGE_RETRY_MIN_MS * Math.pow(1.6, Math.min(current.attempts, 8))
     );
     console.warn(
-      `[bili-pet] background purge retry uid=${id} attempt=${current.attempts} in ${delay}ms:`,
+      `[bili-pet] background flush retry uid=${id} attempt=${current.attempts} in ${delay}ms:`,
       result.error
     );
     current.timer = setTimeout(() => {
@@ -786,6 +831,7 @@ async function onAccountReady({
   emitSyncState(switched ? 'switching' : 'syncing_login', {
     prevUid: prevUid || null,
     uid: id,
+    opsReady: false,
   });
 
   if (switched && prevUid) {
@@ -809,49 +855,147 @@ async function onAccountReady({
     }
   }
 
-  // 立刻挂本地库并放行操作（云端 pull 后台做，可牺牲一点一致性）
+  // 先挂本地库
   setActiveUid(id);
-  setAccountOpsReady(true);
-  console.log(`[bili-pet] local db active uid=${id} (ops ready immediately)`);
-  emitSyncState('local_ready', {
-    uid: id,
-    prevUid: prevUid || null,
-    switched,
-    opsReady: true,
-  });
-  // 不在此广播 account_switched：由 canva 统一发一次，避免反复 toast
+  // 本机已有该 uid 的 SQLite：先放行知识库，云端增量后台拉
+  // 本地库不存在（退出/切号 purge 后）：必须等云端首拉，避免打开空库
+  const canUseLocalSqlite = !localWasMissing && localDbExists(id);
+  if (canUseLocalSqlite) {
+    setAccountOpsReady(true);
+    console.log(`[bili-pet] local db hit uid=${id} (ops ready; cloud pull in background)`);
+    emitSyncState('local_ready', {
+      uid: id,
+      prevUid: prevUid || null,
+      switched,
+      opsReady: true,
+      fromLocal: true,
+    });
+  } else {
+    setAccountOpsReady(false);
+    console.log(`[bili-pet] local db missing uid=${id} (waiting cloud first pull)`);
+    emitSyncState('local_ready', {
+      uid: id,
+      prevUid: prevUid || null,
+      switched,
+      opsReady: false,
+    });
+  }
   if (stale()) return { ok: false, error: 'stale' };
+
+  if (!cloudEnabled()) {
+    setAccountOpsReady(true);
+    emitSyncState('ready', {
+      reason: 'local_only',
+      uid: id,
+      opsReady: true,
+      dataPullDone: true,
+      pulled: false,
+      fromLocal: true,
+    });
+    return { ok: true, uid: id, opsReady: true, pulled: false };
+  }
 
   const bindingChanged = Boolean(switched || autoBound);
   const pullReason = switched ? 'switch_pull' : 'login_pull';
-  // 后台同步，不挡打开
-  void (async () => {
-    const gate = await runFirstPullGate({
-      uid: id,
-      cookieHeader,
-      bindingChanged,
-      localWasMissing,
-      pullReason,
-      isStale,
-    });
-    if (stale()) return;
-    if (!gate.ok) {
-      scheduleFirstPullRetry(id, cookieHeader);
-      emitSyncState('first_pull_blocked', {
-        uid: id,
-        error: gate.error,
-        reason: gate.reason || gate.error,
-      });
-      return;
-    }
-    emitSyncState('ready', {
-      reason: gate.pulled ? 'pull_ok' : gate.reason || 'bg_sync_ok',
-      uid: id,
-      pulled: Boolean(gate.pulled),
-    });
-  })();
 
-  return { ok: true, uid: id, opsReady: true };
+  if (canUseLocalSqlite) {
+    // 立刻可用本地库；云端同步不挡打开
+    emitSyncState('ready', {
+      reason: 'local_sqlite_hit',
+      uid: id,
+      opsReady: true,
+      dataPullDone: true,
+      pulled: false,
+      fromLocal: true,
+    });
+    void (async () => {
+      const gate = await runFirstPullGate({
+        uid: id,
+        cookieHeader,
+        bindingChanged,
+        localWasMissing: false,
+        pullReason,
+        isStale,
+      });
+      if (stale() || getActiveUid() !== id) return;
+      if (!gate.ok) {
+        scheduleFirstPullRetry(id, cookieHeader);
+        emitSyncState('first_pull_blocked', {
+          uid: id,
+          error: gate.error,
+          reason: gate.reason || gate.error,
+          opsReady: true,
+          background: true,
+        });
+        return;
+      }
+      try {
+        markAllCourseStructurePending();
+        schedulePush('post_login_course_backfill');
+      } catch {
+        /* ignore */
+      }
+      if (gate.pulled) {
+        emitSyncState('ready', {
+          reason: 'pull_ok',
+          uid: id,
+          pulled: true,
+          opsReady: true,
+          dataPullDone: true,
+          background: true,
+        });
+      }
+    })();
+    return { ok: true, uid: id, opsReady: true, pulled: false, fromLocal: true };
+  }
+
+  const gate = await runFirstPullGate({
+    uid: id,
+    cookieHeader,
+    bindingChanged,
+    localWasMissing,
+    pullReason,
+    isStale,
+  });
+  if (stale()) return { ok: false, error: 'stale' };
+
+  if (!gate.ok) {
+    setAccountOpsReady(false);
+    scheduleFirstPullRetry(id, cookieHeader);
+    emitSyncState('first_pull_blocked', {
+      uid: id,
+      error: gate.error,
+      reason: gate.reason || gate.error,
+      opsReady: false,
+    });
+    return {
+      ok: true,
+      uid: id,
+      opsReady: false,
+      pullError: gate.error || gate.reason || 'pull_error',
+    };
+  }
+
+  setAccountOpsReady(true);
+  try {
+    markAllCourseStructurePending();
+    schedulePush('post_login_course_backfill');
+  } catch {
+    /* ignore */
+  }
+  emitSyncState('ready', {
+    reason: gate.pulled ? 'pull_ok' : gate.reason || 'bg_sync_ok',
+    uid: id,
+    pulled: Boolean(gate.pulled),
+    opsReady: true,
+    dataPullDone: true,
+  });
+  return {
+    ok: true,
+    uid: id,
+    opsReady: true,
+    pulled: Boolean(gate.pulled),
+  };
 }
 
 function startCloudSync({ onBroadcast } = {}) {
@@ -922,12 +1066,13 @@ function handleAuthCookiePayload(payload) {
 }
 
 function sweepOrphanLocalStores() {
+  // 各 uid 本地库永久保留；仅尝试把仍有 token 的旧号 pending 推上云端
   const active = getActiveUid();
   for (const row of listUidDbFilesOnDisk()) {
     if (!row?.uid || row.uid === active) continue;
     if (purgeJobs.has(row.uid)) continue;
     if (!loadTokenForUid(row.uid)?.token) continue;
-    scheduleBackgroundPurge(row.uid, 'orphan_sweep');
+    scheduleBackgroundPurge(row.uid, 'orphan_flush');
   }
 }
 

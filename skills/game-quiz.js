@@ -5,11 +5,12 @@ const {
   searchNotes,
   loadNoteDoc,
   normalizeBvid,
+  takeQuizBankQuestions,
 } = require('../notes-db');
 
 const MAX_TOPIC_NOTES = 8;
 const MAX_QUESTIONS = 5;
-/** 首包题量 */
+/** 首包题量（题库不足时 LLM 当场生成；题库命中则有多少用多少、至少 1 题即开打） */
 const EARLY_READY = 3;
 const START_LIVES = 3;
 const CORPUS_CHAR_LIMIT = 1700;
@@ -1093,16 +1094,40 @@ async function backfillQuestions(corpus, token) {
     notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
   };
 
+  const scopeBvids = () => {
+    const fromNotes = (session.scope?.notes || [])
+      .map((n) => normalizeBvid(n.bvid) || String(n.bvid || '').trim())
+      .filter(Boolean);
+    const fromScope = Array.isArray(session.scope?.bvids)
+      ? session.scope.bvids.map((b) => normalizeBvid(b) || String(b || '').trim())
+      : [];
+    return [...new Set([...fromNotes, ...fromScope].filter(Boolean))];
+  };
+
   try {
     let idleRounds = 0;
     let failRounds = 0;
     while (session.questions.length < MAX_QUESTIONS) {
       if (token !== backfillToken) return;
-      // 只在答题中补题；已结束则停
       if (session.phase !== 'asking') return;
 
       const need = MAX_QUESTIONS - session.questions.length;
       if (need <= 0) break;
+
+      // 优先继续从题库补
+      const fromBank = takeQuizBankQuestions(scopeBvids(), {
+        limit: need,
+        markUsed: true,
+      });
+      if (fromBank.length) {
+        const added = appendUniqueQuestions(fromBank);
+        if (added > 0) {
+          idleRounds = 0;
+          failRounds = 0;
+          notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
+          continue;
+        }
+      }
 
       let more = [];
       try {
@@ -1158,6 +1183,56 @@ async function beginQuizFromScope() {
   session.targetTotal = MAX_QUESTIONS;
   notifyPet('game_generating');
 
+  const scopeBvids = [
+    ...new Set(
+      (session.scope.notes || [])
+        .map((n) => normalizeBvid(n.bvid) || String(n.bvid || '').trim())
+        .filter(Boolean)
+        .concat(
+          Array.isArray(session.scope.bvids)
+            ? session.scope.bvids
+                .map((b) => normalizeBvid(b) || String(b || '').trim())
+                .filter(Boolean)
+            : []
+        )
+    ),
+  ];
+
+  // 1) 题库命中：立刻开打，不再干等 LLM
+  const bankFirst = takeQuizBankQuestions(scopeBvids, {
+    limit: MAX_QUESTIONS,
+    markUsed: true,
+  });
+  if (bankFirst.length >= 1) {
+    session.questions = bankFirst.slice(0, MAX_QUESTIONS);
+    const ready = session.questions.length;
+    session.phase = 'asking';
+    session.backfilling = ready < MAX_QUESTIONS;
+    notifyPet('game_generating_end');
+    notifyPet('game_play_start');
+
+    const corpus = buildCorpus(session.scope, {
+      charLimit: CORPUS_FIRST_PACK_LIMIT,
+      maxNotes: CORPUS_MAX_NOTES,
+    });
+    if (session.backfilling && corpus.trim()) {
+      const token = ++backfillToken;
+      void backfillQuestions(corpus, token);
+    } else {
+      session.backfilling = false;
+    }
+
+    return {
+      handled: true,
+      ok: true,
+      game: true,
+      gameUi: publicGameUi(),
+      message: session.backfilling
+        ? `开始答题：${session.scope.label}（题库先 ${ready} 题，后台继续补；3 条命）\n中途退出：⌘S+G。`
+        : `开始答题：${session.scope.label}（题库 ${ready} 题，3 条命）\n中途退出：⌘S+G。`,
+    };
+  }
+
   const corpus = buildCorpus(session.scope, {
     charLimit: CORPUS_FIRST_PACK_LIMIT,
     maxNotes: CORPUS_MAX_NOTES,
@@ -1174,7 +1249,7 @@ async function beginQuizFromScope() {
   }
 
   try {
-    // 先出首包，再后台补题（避免开局双请求并行，部分代理会返回空 content）
+    // 题库未命中：当场 LLM 出首包（并顺便写入题库供下次）
     const first = await requestQuestions({
       maxQuestions: EARLY_READY,
       corpus,
@@ -1192,6 +1267,26 @@ async function beginQuizFromScope() {
     }
 
     session.questions = first;
+    try {
+      const { saveQuizBankQuestions } = require('../notes-db');
+      const byBvid = new Map();
+      for (const q of first) {
+        const bv =
+          normalizeBvid(q.sourceBvid) ||
+          scopeBvids[0] ||
+          '';
+        if (!bv) continue;
+        if (!byBvid.has(bv)) byBvid.set(bv, []);
+        byBvid.get(bv).push(q);
+      }
+      for (const [bv, list] of byBvid) {
+        const rev = Number(loadNoteDoc(bv)?.revision) || 0;
+        saveQuizBankQuestions(bv, list, { sourceRev: rev });
+      }
+    } catch {
+      /* ignore bank write */
+    }
+
     const ready = session.questions.length;
     session.phase = 'asking';
     session.backfilling = ready < MAX_QUESTIONS;
@@ -1201,6 +1296,16 @@ async function beginQuizFromScope() {
     if (session.backfilling) {
       const token = ++backfillToken;
       void backfillQuestions(corpus, token);
+    }
+
+    // 范围笔记若尚未预生成，后台补库存
+    try {
+      const { scheduleQuizPregenForNote } = require('../quiz-pregen');
+      for (const bv of scopeBvids.slice(0, 6)) {
+        scheduleQuizPregenForNote(bv, { reason: 'game_miss', immediate: false });
+      }
+    } catch {
+      /* ignore */
     }
 
     return {

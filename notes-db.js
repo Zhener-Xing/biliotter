@@ -288,7 +288,76 @@ function ensureSyncTables(database) {
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS sync_tombstones (
+      entity_type TEXT NOT NULL,
+      entity_key TEXT NOT NULL,
+      deleted_at INTEGER NOT NULL,
+      PRIMARY KEY (entity_type, entity_key)
+    );
   `);
+}
+
+function addTombstone(entityType, entityKey) {
+  const type = String(entityType || '').trim();
+  const key = String(entityKey || '').trim();
+  if (!type || !key) return;
+  try {
+    getDb()
+      .prepare(
+        `
+        INSERT INTO sync_tombstones (entity_type, entity_key, deleted_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(entity_type, entity_key) DO UPDATE SET deleted_at = excluded.deleted_at
+      `
+      )
+      .run(type, key, Date.now());
+  } catch (err) {
+    console.warn('[bili-pet] addTombstone failed:', err.message || err);
+  }
+}
+
+function clearTombstone(entityType, entityKey) {
+  const type = String(entityType || '').trim();
+  const key = String(entityKey || '').trim();
+  if (!type || !key) return;
+  try {
+    getDb()
+      .prepare(
+        'DELETE FROM sync_tombstones WHERE entity_type = ? AND entity_key = ?'
+      )
+      .run(type, key);
+  } catch {
+    /* ignore */
+  }
+}
+
+function hasTombstone(entityType, entityKey) {
+  const type = String(entityType || '').trim();
+  const key = String(entityKey || '').trim();
+  if (!type || !key) return false;
+  try {
+    const row = getDb()
+      .prepare(
+        'SELECT 1 AS ok FROM sync_tombstones WHERE entity_type = ? AND entity_key = ?'
+      )
+      .get(type, key);
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
+
+function listTombstones() {
+  try {
+    return getDb()
+      .prepare(
+        `SELECT entity_type AS entityType, entity_key AS entityKey, deleted_at AS deletedAt
+         FROM sync_tombstones ORDER BY deleted_at ASC`
+      )
+      .all();
+  } catch {
+    return [];
+  }
 }
 
 function getDb() {
@@ -319,6 +388,7 @@ function getDb() {
   ensureCourseGroupTables(db);
   ensureStudyActivityTables(db);
   ensureSyncTables(db);
+  ensureQuizBankTables(db);
   migrateLegacyBufferOnce(db);
   backfillBodyMd(db);
   backfillAllChunksIfEmpty(db);
@@ -335,6 +405,224 @@ function ensureStudyActivityTables(database) {
       updated_at INTEGER NOT NULL
     );
   `);
+}
+
+/** 本地答题题库（不进云同步；随 uid 分库） */
+function ensureQuizBankTables(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS quiz_bank (
+      id TEXT PRIMARY KEY NOT NULL,
+      bvid TEXT NOT NULL,
+      q TEXT NOT NULL,
+      choices_json TEXT NOT NULL,
+      answer INTEGER NOT NULL,
+      explain_text TEXT NOT NULL DEFAULT '',
+      source_rev INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      used_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_quiz_bank_bvid
+      ON quiz_bank(bvid, used_at, created_at);
+  `);
+}
+
+function makeQuizBankId() {
+  return `qb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function countQuizBankForBvid(bvid) {
+  const key = String(bvid || '').trim();
+  if (!key) return 0;
+  try {
+    const row = getDb()
+      .prepare('SELECT COUNT(*) AS c FROM quiz_bank WHERE bvid = ?')
+      .get(key);
+    return Number(row?.c) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function getQuizBankMetaForBvid(bvid) {
+  const key = String(bvid || '').trim();
+  if (!key) return { count: 0, maxSourceRev: 0 };
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT COUNT(*) AS c, COALESCE(MAX(source_rev), 0) AS maxRev
+         FROM quiz_bank WHERE bvid = ?`
+      )
+      .get(key);
+    return {
+      count: Number(row?.c) || 0,
+      maxSourceRev: Number(row?.maxRev) || 0,
+    };
+  } catch {
+    return { count: 0, maxSourceRev: 0 };
+  }
+}
+
+function saveQuizBankQuestions(bvid, questions, { sourceRev = 0 } = {}) {
+  const key = String(bvid || '').trim();
+  if (!key || !Array.isArray(questions) || !questions.length) {
+    return { ok: false, saved: 0 };
+  }
+  const now = Date.now();
+  const rev = Number(sourceRev) || 0;
+  let saved = 0;
+  try {
+    const database = getDb();
+    const ins = database.prepare(
+      `
+      INSERT INTO quiz_bank
+        (id, bvid, q, choices_json, answer, explain_text, source_rev, created_at, used_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    `
+    );
+    const existingQs = new Set(
+      database
+        .prepare('SELECT q FROM quiz_bank WHERE bvid = ?')
+        .all(key)
+        .map((r) => String(r.q || '').trim())
+    );
+    withTransaction(database, () => {
+      for (const item of questions) {
+        const q = String(item?.q || '').trim();
+        if (!q || existingQs.has(q)) continue;
+        let choices = Array.isArray(item.choices)
+          ? item.choices.map((c) => String(c || '').trim())
+          : [];
+        if (choices.length > 4) choices = choices.slice(0, 4);
+        while (choices.length < 4) choices.push(`选项${choices.length + 1}`);
+        if (choices.some((c) => !c)) continue;
+        let answer = Number(item.answer);
+        if (!Number.isInteger(answer) || answer < 0 || answer > 3) continue;
+        ins.run(
+          makeQuizBankId(),
+          key,
+          q,
+          JSON.stringify(choices),
+          answer,
+          String(item.explain || '').trim(),
+          rev,
+          now
+        );
+        existingQs.add(q);
+        saved += 1;
+      }
+    });
+    return { ok: true, saved };
+  } catch (err) {
+    console.warn('[bili-pet] saveQuizBankQuestions failed:', err?.message || err);
+    return { ok: false, saved, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * 从题库取题（优先未用过的）。返回 GameQuestion 形态。
+ * @param {string[]} bvids
+ * @param {{ limit?: number, markUsed?: boolean }} [opts]
+ */
+function takeQuizBankQuestions(bvids, { limit = 5, markUsed = true } = {}) {
+  const ids = [
+    ...new Set(
+      (Array.isArray(bvids) ? bvids : [])
+        .map((b) => String(b || '').trim())
+        .filter(Boolean)
+    ),
+  ];
+  const n = Math.max(1, Math.min(20, Number(limit) || 5));
+  if (!ids.length) return [];
+  try {
+    const database = getDb();
+    const ph = ids.map(() => '?').join(',');
+    const rows = database
+      .prepare(
+        `
+        SELECT id, bvid, q, choices_json AS choicesJson, answer, explain_text AS explainText
+        FROM quiz_bank
+        WHERE bvid IN (${ph})
+        ORDER BY CASE WHEN used_at IS NULL THEN 0 ELSE 1 END,
+                 created_at DESC
+        LIMIT ?
+      `
+      )
+      .all(...ids, n);
+
+    const now = Date.now();
+    const out = [];
+    const mark = database.prepare(
+      'UPDATE quiz_bank SET used_at = ? WHERE id = ?'
+    );
+    for (const row of rows) {
+      let choices = [];
+      try {
+        choices = JSON.parse(String(row.choicesJson || '[]'));
+      } catch {
+        choices = [];
+      }
+      if (!Array.isArray(choices) || choices.length < 4) continue;
+      const answer = Number(row.answer);
+      if (!Number.isInteger(answer) || answer < 0 || answer > 3) continue;
+      const q = String(row.q || '').trim();
+      if (!q) continue;
+      out.push({
+        q,
+        choices: choices.slice(0, 4).map((c) => String(c || '').trim()),
+        answer,
+        explain: String(row.explainText || '').trim(),
+        sourceBvid: String(row.bvid || '').trim(),
+        bankId: row.id,
+      });
+      if (markUsed) {
+        try {
+          mark.run(now, row.id);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return out;
+  } catch (err) {
+    console.warn('[bili-pet] takeQuizBankQuestions failed:', err?.message || err);
+    return [];
+  }
+}
+
+function deleteQuizBankForBvid(bvid) {
+  const key = String(bvid || '').trim();
+  if (!key) return { ok: false };
+  try {
+    const info = getDb().prepare('DELETE FROM quiz_bank WHERE bvid = ?').run(key);
+    return { ok: true, deleted: info.changes || 0 };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * 笔记是否「够成熟」可后台出题。
+ * @returns {{ ok: boolean, score: number, reason?: string }}
+ */
+function assessNoteQuizMaturity(doc) {
+  if (!doc) return { ok: false, score: 0, reason: 'no_doc' };
+  const body = String(doc.bodyMd || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const notes = doc.notes && typeof doc.notes === 'object' ? doc.notes : null;
+  let score = 0;
+  score += Math.min(40, Math.floor(body.length / 18));
+  const bullets = Array.isArray(notes?.notes) ? notes.notes : [];
+  score += Math.min(30, bullets.length * 6);
+  if (String(notes?.summary || '').trim()) score += 15;
+  const cues = Array.isArray(notes?.cues) ? notes.cues : [];
+  score += Math.min(15, cues.length * 3);
+  if (/##\s*要点/.test(String(doc.bodyMd || ''))) score += 10;
+  if (/##\s*总结/.test(String(doc.bodyMd || ''))) score += 8;
+  // 约：正文 ≥ ~360 字，或若干要点 + 总结
+  if (score < 48) return { ok: false, score, reason: 'too_thin' };
+  return { ok: true, score };
 }
 
 function dayKeyFromTs(ts = Date.now()) {
@@ -475,7 +763,10 @@ function buildPendingPushPayload() {
     if (p.entityType === 'note' && !seenNotes.has(p.entityKey)) {
       seenNotes.add(p.entityKey);
       const doc = loadNoteDoc(p.entityKey);
-      if (!doc) continue;
+      if (!doc) {
+        notes.push({ bvid: p.entityKey, deleted: true });
+        continue;
+      }
       notes.push({
         bvid: doc.bvid,
         notes: doc.notes,
@@ -505,6 +796,36 @@ function buildPendingPushPayload() {
           createdAt: g.createdAt,
           updatedAt: g.updatedAt,
         });
+        // 组元数据待推时一并带上文件夹/条目，避免只同步空壳
+        for (const f of g.folders || []) {
+          if (!f?.id || seenFolders.has(f.id)) continue;
+          seenFolders.add(f.id);
+          courseFolders.push({
+            id: f.id,
+            groupId: g.id,
+            title: f.title,
+            ord: f.ord,
+            createdAt: f.createdAt,
+            updatedAt: f.updatedAt,
+          });
+        }
+        for (const it of g.items || []) {
+          const itemKey = `${g.id}::${it.bvid}`;
+          if (!it?.bvid || seenItems.has(itemKey)) continue;
+          seenItems.add(itemKey);
+          courseItems.push({
+            groupId: g.id,
+            bvid: it.bvid,
+            title: it.title,
+            ord: it.ord,
+            status: it.status,
+            addedAt: it.addedAt,
+            folderId: it.folderId ?? null,
+          });
+        }
+      } else {
+        // 本地已删：推送删除，避免清 pending 后云端残留、下次拉取又回来
+        courseGroups.push({ id: p.entityKey, deleted: true });
       }
     } else if (p.entityType === 'course_folder' && !seenFolders.has(p.entityKey)) {
       seenFolders.add(p.entityKey);
@@ -516,8 +837,9 @@ function buildPendingPushPayload() {
           )
           .get(p.entityKey);
         if (row) courseFolders.push(row);
+        else courseFolders.push({ id: p.entityKey, deleted: true });
       } catch {
-        /* ignore */
+        courseFolders.push({ id: p.entityKey, deleted: true });
       }
     } else if (p.entityType === 'course_item' && !seenItems.has(p.entityKey)) {
       seenItems.add(p.entityKey);
@@ -532,8 +854,29 @@ function buildPendingPushPayload() {
           )
           .get(groupId, bvid);
         if (row) courseItems.push(row);
+        else courseItems.push({ groupId, bvid, deleted: true });
       } catch {
-        /* ignore */
+        courseItems.push({ groupId, bvid, deleted: true });
+      }
+    }
+  }
+
+  // 墓碑：确保已删实体持续向云端声明删除，避免漏推后又被拉回
+  for (const t of listTombstones()) {
+    if (t.entityType === 'note' && !seenNotes.has(t.entityKey)) {
+      seenNotes.add(t.entityKey);
+      notes.push({ bvid: t.entityKey, deleted: true });
+    } else if (t.entityType === 'course_group' && !seenGroups.has(t.entityKey)) {
+      seenGroups.add(t.entityKey);
+      courseGroups.push({ id: t.entityKey, deleted: true });
+    } else if (t.entityType === 'course_folder' && !seenFolders.has(t.entityKey)) {
+      seenFolders.add(t.entityKey);
+      courseFolders.push({ id: t.entityKey, deleted: true });
+    } else if (t.entityType === 'course_item' && !seenItems.has(t.entityKey)) {
+      seenItems.add(t.entityKey);
+      const [groupId, bvid] = String(t.entityKey).split('::');
+      if (groupId && bvid) {
+        courseItems.push({ groupId, bvid, deleted: true });
       }
     }
   }
@@ -550,6 +893,29 @@ function applyRemoteChanges(changes = {}) {
     return applyRemoteChangesInner(changes);
   } finally {
     suppressWriteHook = Math.max(0, suppressWriteHook - 1);
+  }
+}
+
+function isRemoteDeleted(row) {
+  if (!row || typeof row !== 'object') return false;
+  if (row.deleted === true || row.deleted === 1 || row.deleted === '1') return true;
+  if (row.deleted_at != null || row.deletedAt != null) return true;
+  return false;
+}
+
+function hasPendingEntity(entityType, entityKey) {
+  const type = String(entityType || '').trim();
+  const key = String(entityKey || '').trim();
+  if (!type || !key) return false;
+  try {
+    const row = getDb()
+      .prepare(
+        'SELECT 1 AS ok FROM sync_pending WHERE entity_type = ? AND entity_key = ?'
+      )
+      .get(type, key);
+    return Boolean(row);
+  } catch {
+    return false;
   }
 }
 
@@ -570,6 +936,26 @@ function applyRemoteChangesInner(changes = {}) {
   for (const n of notes) {
     const bvid = String(n.bvid || '').trim();
     if (!bvid) continue;
+    if (isRemoteDeleted(n)) {
+      try {
+        const database = getDb();
+        withTransaction(database, () => {
+          database.prepare('DELETE FROM note_chunks_fts WHERE bvid = ?').run(bvid);
+          database.prepare('DELETE FROM note_chunks WHERE bvid = ?').run(bvid);
+          database.prepare('DELETE FROM cornell_notes WHERE bvid = ?').run(bvid);
+        });
+      } catch {
+        /* ignore */
+      }
+      clearPending([{ entityType: 'note', entityKey: bvid }]);
+      clearTombstone('note', bvid);
+      applied += 1;
+      continue;
+    }
+    if (hasTombstone('note', bvid) || (hasPendingEntity('note', bvid) && !loadNoteDoc(bvid))) {
+      // 本地已删：不要被云端旧副本复活
+      continue;
+    }
     const remoteUpdated = Number(n.updated_at ?? n.updatedAt) || 0;
     const local = loadNoteDoc(bvid);
     if (local && local.updatedAt > remoteUpdated) continue;
@@ -622,11 +1008,107 @@ function applyRemoteChangesInner(changes = {}) {
     const id = String(g.id || '').trim();
     if (!id) continue;
     const database = getDb();
+    if (isRemoteDeleted(g)) {
+      withTransaction(database, () => {
+        database.prepare('DELETE FROM course_group_items WHERE group_id = ?').run(id);
+        database.prepare('DELETE FROM course_group_folders WHERE group_id = ?').run(id);
+        database.prepare('DELETE FROM course_groups WHERE id = ?').run(id);
+      });
+      clearPending([{ entityType: 'course_group', entityKey: id }]);
+      clearTombstone('course_group', id);
+      applied += 1;
+      continue;
+    }
+    // 本地已删（墓碑或待推删除）：勿被云端旧副本/空壳「未命名」复活
+    if (
+      hasTombstone('course_group', id) ||
+      (hasPendingEntity('course_group', id) && !getCourseGroup(id))
+    ) {
+      continue;
+    }
+    // 历史误推空壳（无标题无导图）：仅当本地也无内容时才清掉；有文件夹/条目则保留并回推
+    const remoteTitle = String(g.title || '').trim();
+    const remoteMind = String(g.mindmap_md ?? g.mindmapMd ?? '').trim();
+    const localRow = database
+      .prepare('SELECT * FROM course_groups WHERE id = ?')
+      .get(id);
+    const localFolderCount = localRow
+      ? Number(
+          database
+            .prepare(
+              'SELECT COUNT(*) AS c FROM course_group_folders WHERE group_id = ?'
+            )
+            .get(id)?.c
+        ) || 0
+      : 0;
+    const localItemCount = localRow
+      ? Number(
+          database
+            .prepare(
+              'SELECT COUNT(*) AS c FROM course_group_items WHERE group_id = ?'
+            )
+            .get(id)?.c
+        ) || 0
+      : 0;
+    const localTitle = String(localRow?.title || '').trim();
+    const localMind = String(localRow?.mindmap_md || '').trim();
+    const localHasContent =
+      Boolean(localTitle || localMind) ||
+      localFolderCount > 0 ||
+      localItemCount > 0;
+
+    if (!remoteTitle && !remoteMind) {
+      if (localHasContent) {
+        try {
+          markPending('course_group', id);
+          const folders = database
+            .prepare('SELECT id FROM course_group_folders WHERE group_id = ?')
+            .all(id);
+          for (const f of folders) markPending('course_folder', f.id);
+          const items = database
+            .prepare(
+              'SELECT bvid FROM course_group_items WHERE group_id = ?'
+            )
+            .all(id);
+          for (const it of items) {
+            if (it?.bvid) markPending('course_item', `${id}::${it.bvid}`);
+          }
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+      withTransaction(database, () => {
+        database.prepare('DELETE FROM course_group_items WHERE group_id = ?').run(id);
+        database.prepare('DELETE FROM course_group_folders WHERE group_id = ?').run(id);
+        database.prepare('DELETE FROM course_groups WHERE id = ?').run(id);
+      });
+      addTombstone('course_group', id);
+      markPending('course_group', id);
+      applied += 1;
+      continue;
+    }
+
     const updatedAt = Number(g.updated_at ?? g.updatedAt) || Date.now();
+    const localUpdated = Number(localRow?.updated_at) || 0;
+    // 本地更新：不要被更旧的云端副本覆盖
+    if (localRow && localUpdated > updatedAt) {
+      markPending('course_group', id);
+      continue;
+    }
+    // 云端空标题/空导图不得抹掉本地已有内容
+    const nextTitle = remoteTitle || localTitle;
+    const nextMind = remoteMind || localMind;
+    const nextTopic =
+      String(g.topic || '').trim() || String(localRow?.topic || '').trim();
     const metaJson =
       typeof g.meta_json === 'string'
         ? g.meta_json
-        : JSON.stringify(g.meta || {});
+        : typeof g.metaJson === 'string'
+          ? g.metaJson
+          : g.meta != null
+            ? JSON.stringify(g.meta || {})
+            : String(localRow?.meta_json || '{}');
     database
       .prepare(
         `
@@ -642,12 +1124,14 @@ function applyRemoteChangesInner(changes = {}) {
       )
       .run(
         id,
-        String(g.title || ''),
-        String(g.topic || ''),
+        nextTitle,
+        nextTopic,
         metaJson,
-        String(g.mindmap_md ?? g.mindmapMd ?? ''),
-        Number(g.created_at ?? g.createdAt) || updatedAt,
-        updatedAt
+        nextMind,
+        Number(g.created_at ?? g.createdAt) ||
+          Number(localRow?.created_at) ||
+          updatedAt,
+        Math.max(updatedAt, localUpdated)
       );
     clearPending([{ entityType: 'course_group', entityKey: id }]);
     applied += 1;
@@ -656,7 +1140,31 @@ function applyRemoteChangesInner(changes = {}) {
   for (const f of courseFolders) {
     const id = String(f.id || '').trim();
     const groupId = String(f.group_id ?? f.groupId ?? '').trim();
+    if (isRemoteDeleted(f)) {
+      if (!id) continue;
+      try {
+        getDb()
+          .prepare('DELETE FROM course_group_folders WHERE id = ?')
+          .run(id);
+        getDb()
+          .prepare(
+            'UPDATE course_group_items SET folder_id = NULL WHERE folder_id = ?'
+          )
+          .run(id);
+      } catch {
+        /* ignore */
+      }
+      clearPending([{ entityType: 'course_folder', entityKey: id }]);
+      applied += 1;
+      continue;
+    }
     if (!id || !groupId) continue;
+    if (hasPendingEntity('course_folder', id)) {
+      const exists = getDb()
+        .prepare('SELECT id FROM course_group_folders WHERE id = ?')
+        .get(id);
+      if (!exists) continue;
+    }
     const updatedAt = Number(f.updated_at ?? f.updatedAt) || Date.now();
     getDb()
       .prepare(
@@ -685,6 +1193,29 @@ function applyRemoteChangesInner(changes = {}) {
     const groupId = String(it.group_id ?? it.groupId ?? '').trim();
     const bvid = String(it.bvid || '').trim();
     if (!groupId || !bvid) continue;
+    const itemKey = `${groupId}::${bvid}`;
+    if (isRemoteDeleted(it)) {
+      try {
+        getDb()
+          .prepare(
+            'DELETE FROM course_group_items WHERE group_id = ? AND bvid = ? COLLATE NOCASE'
+          )
+          .run(groupId, bvid);
+      } catch {
+        /* ignore */
+      }
+      clearPending([{ entityType: 'course_item', entityKey: itemKey }]);
+      applied += 1;
+      continue;
+    }
+    if (hasPendingEntity('course_item', itemKey)) {
+      const exists = getDb()
+        .prepare(
+          'SELECT bvid FROM course_group_items WHERE group_id = ? AND bvid = ? COLLATE NOCASE'
+        )
+        .get(groupId, bvid);
+      if (!exists) continue;
+    }
     getDb()
       .prepare(
         `
@@ -707,7 +1238,7 @@ function applyRemoteChangesInner(changes = {}) {
         it.folder_id ?? it.folderId ?? null
       );
     clearPending([
-      { entityType: 'course_item', entityKey: `${groupId}::${bvid}` },
+      { entityType: 'course_item', entityKey: itemKey },
     ]);
     applied += 1;
   }
@@ -717,6 +1248,38 @@ function applyRemoteChangesInner(changes = {}) {
 
 function hasPendingSync() {
   return listPending().length > 0;
+}
+
+/** 登出/清库前把课程组完整结构标为待推，避免历史未 markPending 的文件夹/条目丢失 */
+function markAllCourseStructurePending() {
+  try {
+    const database = getDb();
+    const groups = database.prepare('SELECT id FROM course_groups').all();
+    for (const g of groups) {
+      markPending('course_group', g.id);
+    }
+    const folders = database.prepare('SELECT id FROM course_group_folders').all();
+    for (const f of folders) {
+      markPending('course_folder', f.id);
+    }
+    const items = database
+      .prepare('SELECT group_id AS groupId, bvid FROM course_group_items')
+      .all();
+    for (const it of items) {
+      const gid = String(it.groupId || '').trim();
+      const bvid = normalizeBvid(it.bvid);
+      if (gid && bvid) markPending('course_item', `${gid}::${bvid}`);
+    }
+    // 已删墓碑重新入队，确保云端残留会被再次推送删除
+    for (const t of listTombstones()) {
+      markPending(t.entityType, t.entityKey);
+    }
+  } catch (err) {
+    console.warn(
+      '[bili-pet] markAllCourseStructurePending failed:',
+      err.message || err
+    );
+  }
 }
 
 function addStudyMs(ms, at = Date.now()) {
@@ -1036,7 +1599,44 @@ function listCourseGroups() {
       `
       )
       .all();
-    return rows.map((row) => ({
+    return rows
+      .filter((row) => {
+        if (hasTombstone('course_group', row.id)) return false;
+        const title = String(row.title || '').trim();
+        const mind = String(row.mindmap_md || '').trim();
+        const itemCount = Number(row.item_count) || 0;
+        const folderCount = Number(row.folder_count) || 0;
+        // 仅真正空壳才清理；有文件夹/条目时绝不能删（曾误伤 /plan 建的体系）
+        if (!title && !mind && itemCount === 0 && folderCount === 0) {
+          try {
+            addTombstone('course_group', row.id);
+            markPending('course_group', row.id);
+            getDb().prepare('DELETE FROM course_groups WHERE id = ?').run(row.id);
+          } catch {
+            /* ignore */
+          }
+          return false;
+        }
+        // 有内容但标题丢了：补展示名并回推，而不是清空
+        if (!title && (folderCount > 0 || itemCount > 0 || mind)) {
+          try {
+            const topic = String(row.topic || '').trim();
+            const repaired =
+              topic.slice(0, 24) || (mind ? '课程导图' : '未命名课程组');
+            getDb()
+              .prepare(
+                'UPDATE course_groups SET title = ?, updated_at = ? WHERE id = ?'
+              )
+              .run(repaired, Date.now(), row.id);
+            markPending('course_group', row.id);
+            row.title = repaired;
+          } catch {
+            /* ignore */
+          }
+        }
+        return true;
+      })
+      .map((row) => ({
       id: row.id,
       title: String(row.title || '').trim() || '未命名课程组',
       topic: String(row.topic || '').trim(),
@@ -1054,6 +1654,7 @@ function listCourseGroups() {
 function getCourseGroup(id) {
   const key = String(id || '').trim();
   if (!key) return null;
+  if (hasTombstone('course_group', key)) return null;
   try {
     const database = getDb();
     const row = database
@@ -1081,7 +1682,7 @@ function createCourseGroup({ title, topic = '', items = [], meta = null } = {}) 
 
   try {
     const database = getDb();
-    withTransaction(database, () => {
+    const txResult = withTransaction(database, () => {
       database
         .prepare(
           `
@@ -1100,6 +1701,7 @@ function createCourseGroup({ title, topic = '', items = [], meta = null } = {}) 
       );
       let ord = 0;
       const seen = new Set();
+      const insertedBvids = [];
       for (const raw of list) {
         const bvid = normalizeBvid(raw?.bvid ?? raw);
         if (!bvid || seen.has(bvid.toUpperCase())) continue;
@@ -1109,10 +1711,17 @@ function createCourseGroup({ title, topic = '', items = [], meta = null } = {}) 
             ? String(raw.title || '').trim()
             : '';
         ins.run(id, bvid, itemTitle, ord, now);
+        insertedBvids.push(bvid);
         ord += 1;
       }
+      return insertedBvids;
     });
+    const insertedBvids = Array.isArray(txResult) ? txResult : [];
+    clearTombstone('course_group', id);
     markPending('course_group', id);
+    for (const bvid of insertedBvids) {
+      markPending('course_item', `${id}::${bvid}`);
+    }
     return { ok: true, group: getCourseGroup(id) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1182,7 +1791,10 @@ function deleteCourseGroup(id) {
         .run(key);
       return database.prepare('DELETE FROM course_groups WHERE id = ?').run(key);
     });
-    if (info.changes > 0) markPending('course_group', key);
+    if (info.changes > 0) {
+      addTombstone('course_group', key);
+      markPending('course_group', key);
+    }
     return { ok: true, deleted: info.changes > 0, id: key };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1269,6 +1881,8 @@ function createCourseFolder(groupId, { title = '', ord = null } = {}) {
         .run(id, gid, name, Number(nextOrd) || 0, now, now);
       touchCourseGroup(database, gid, now);
     });
+    markPending('course_folder', id);
+    markPending('course_group', gid);
     return { ok: true, folderId: id, group: getCourseGroup(gid) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1309,6 +1923,8 @@ function updateCourseFolder(groupId, folderId, patch = {}) {
         .run(title, now, fid, gid);
       touchCourseGroup(database, gid, now);
     });
+    markPending('course_folder', fid);
+    markPending('course_group', gid);
     return { ok: true, group: getCourseGroup(gid) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1331,6 +1947,11 @@ function deleteCourseFolder(groupId, folderId) {
     if (!existing) return { ok: false, error: 'not_found' };
 
     const now = Date.now();
+    const movedItems = database
+      .prepare(
+        'SELECT bvid FROM course_group_items WHERE group_id = ? AND folder_id = ?'
+      )
+      .all(gid, fid);
     withTransaction(database, () => {
       database
         .prepare(
@@ -1346,6 +1967,13 @@ function deleteCourseFolder(groupId, folderId) {
         .run(fid, gid);
       touchCourseGroup(database, gid, now);
     });
+    for (const row of movedItems) {
+      const bvid = normalizeBvid(row?.bvid);
+      if (bvid) markPending('course_item', `${gid}::${bvid}`);
+    }
+    addTombstone('course_folder', fid);
+    markPending('course_folder', fid);
+    markPending('course_group', gid);
     return { ok: true, group: getCourseGroup(gid) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1402,6 +2030,8 @@ function addCourseGroupItem(
       touchCourseGroup(database, gid, now);
     });
 
+    markPending('course_item', `${gid}::${key}`);
+    markPending('course_group', gid);
     return { ok: true, group: getCourseGroup(gid) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1448,6 +2078,8 @@ function updateCourseGroupItem(groupId, bvid, patch = {}) {
         .run(title, folderId, gid, key);
       touchCourseGroup(database, gid, now);
     });
+    markPending('course_item', `${gid}::${key}`);
+    markPending('course_group', gid);
     return { ok: true, group: getCourseGroup(gid) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -1475,6 +2107,9 @@ function removeCourseGroupItem(groupId, bvid) {
       return result;
     });
     if (!info.changes) return { ok: false, error: 'not_found' };
+    addTombstone('course_item', `${gid}::${key}`);
+    markPending('course_item', `${gid}::${key}`);
+    markPending('course_group', gid);
     return { ok: true, group: getCourseGroup(gid) };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -2089,6 +2724,7 @@ function rowToDoc(row) {
 function loadNoteDoc(bvid) {
   const key = String(bvid || '').trim();
   if (!key) return null;
+  if (hasTombstone('note', key)) return null;
   try {
     const row = getDb()
       .prepare(
@@ -2155,8 +2791,19 @@ function saveNoteDoc(bvid, patch = {}) {
 
   reindexNoteChunks(key, bodyMd, { title });
 
+  clearTombstone('note', key);
   markPending('note', key);
-  return loadNoteDoc(key);
+  const saved = loadNoteDoc(key);
+  // 云端拉取写入时不触发；笔记够成熟则后台预生成题库
+  if (suppressWriteHook === 0 && saved) {
+    try {
+      const { scheduleQuizPregenForNote } = require('./quiz-pregen');
+      scheduleQuizPregenForNote(key, { reason: 'note_saved' });
+    } catch {
+      /* ignore */
+    }
+  }
+  return saved;
 }//数据更新逻辑
 
 function safeAssetKey(bvid) {
@@ -2175,7 +2822,9 @@ function listNoteDocs() {
          ORDER BY COALESCE(created_at, updated_at) DESC, updated_at DESC`
       )
       .all();
-    return rows.map((row) => {
+    return rows
+      .filter((row) => !hasTombstone('note', row.bvid))
+      .map((row) => {
       const doc = rowToDoc(row);
       const preview = String(doc.bodyMd || '')
         .replace(/\s+/g, ' ')
@@ -2253,6 +2902,15 @@ function deleteNoteDoc(bvid) {
       } catch {
       }
     }
+    if (info.changes > 0) {
+      addTombstone('note', key);
+      markPending('note', key);
+      try {
+        deleteQuizBankForBvid(key);
+      } catch {
+        /* ignore */
+      }
+    }
     return { ok: true, deleted: info.changes > 0, bvid: key };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -2315,6 +2973,7 @@ module.exports = {
   clearPending,
   clearAllPending,
   hasPendingSync,
+  markAllCourseStructurePending,
   getCloudRevision,
   setCloudRevision,
   buildPendingPushPayload,
@@ -2341,5 +3000,11 @@ module.exports = {
   addDistractCount,
   getStudyDay,
   listStudyActivity,
+  countQuizBankForBvid,
+  getQuizBankMetaForBvid,
+  saveQuizBankQuestions,
+  takeQuizBankQuestions,
+  deleteQuizBankForBvid,
+  assessNoteQuizMaturity,
 };
 //主要是数据库逻辑，有一部分AI维护优先让AI读逻辑，我都标注出来了

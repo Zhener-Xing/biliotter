@@ -168,7 +168,7 @@ let notesOrganizer = null;
 const MAX_NOTE_ASSET_BYTES = 8 * 1024 * 1024;
 
 let lastChordD = 0;
-let lastChordC = 0;
+let lastChordX = 0;
 let lastChordO = 0;
 let lastChordS = 0;
 let lastChordG = 0;
@@ -326,7 +326,7 @@ function registerStopChord() {
   const okO = globalShortcut.register('CommandOrControl+O', () => {
     lastChordO = Date.now();
     if (lastChordO - lastChordD <= CHORD_MS) endStudy();
-    else if (lastChordO - lastChordC <= CHORD_MS) openChatWindow();
+    else if (lastChordO - lastChordX <= CHORD_MS) openChatWindow();
   });
   if (!okD || !okO) {
     console.warn('[bili-pet] failed to register ⌘D+O stop chord');
@@ -389,12 +389,12 @@ function registerGameStopChord() {
 }
 
 function registerChatShortcut() {
-  const ok = globalShortcut.register('CommandOrControl+C', () => {
-    lastChordC = Date.now();
-    if (lastChordC - lastChordO <= CHORD_MS) openChatWindow();
+  const ok = globalShortcut.register('CommandOrControl+X', () => {
+    lastChordX = Date.now();
+    if (lastChordX - lastChordO <= CHORD_MS) openChatWindow();
   });
   if (!ok) {
-    console.warn('[bili-pet] failed to register ⌘C+O chat chord');
+    console.warn('[bili-pet] failed to register ⌘X+O chat chord');
   }
 }//注册打开对话快捷键
 
@@ -879,6 +879,9 @@ function requireBoundAccount() {
   if (!uid || !acc.sessionLoggedIn) {
     return { ok: false, error: 'not_bound' };
   }
+  if (!isAccountOpsReady()) {
+    return { ok: false, error: 'syncing' };
+  }
   return { ok: true, uid };
 }
 
@@ -936,10 +939,9 @@ function unlockLocalSession(uid, payload = {}) {
 
   const acc = loadAccount();
   const bound = acc.activeUid || acc.boundUid;
+  // 首拉完成前 opsReady 可能仍为 false；只要本 uid 已挂载会话，就不要反复打断首拉
   const wasLive =
-    Boolean(acc.sessionLoggedIn) &&
-    getActiveUid() === id &&
-    isAccountOpsReady();
+    Boolean(acc.sessionLoggedIn) && getActiveUid() === id;
 
   if (!bound || bound !== id) {
     const gate = handleAccountPayload({
@@ -969,7 +971,8 @@ function unlockLocalSession(uid, payload = {}) {
 
     if (gate.status === 'auto_bound') {
       setActiveUid(gate.uid);
-      setAccountOpsReady(true);
+      // 云端开启时等首拉完成再放行；本地模式可立即用
+      setAccountOpsReady(!cloudEnabled());
       saveAccountSessionLoggedIn(gate.uid);
       void ensureAccountLocalStore(gate, payload);
       return { ok: true, uid: gate.uid, status: gate.status };
@@ -981,7 +984,7 @@ function unlockLocalSession(uid, payload = {}) {
     if (gate.status === 'logged_in') {
       accountOpSeq += 1; // cancel stale logout/purge from earlier false locks
       setActiveUid(gate.uid);
-      setAccountOpsReady(true);
+      setAccountOpsReady(!cloudEnabled());
       saveAccountSessionLoggedIn(gate.uid);
       void ensureAccountLocalStore(gate, payload);
       return { ok: true, uid: gate.uid, status: gate.status };
@@ -995,7 +998,12 @@ function unlockLocalSession(uid, payload = {}) {
   }
   saveAccountSessionLoggedIn(id);
   if (!getActiveUid()) setActiveUid(id);
-  setAccountOpsReady(true);
+  // 恢复会话：云端仍要走首拉门闩，勿提前 opsReady
+  if (!wasLive) {
+    setAccountOpsReady(!cloudEnabled());
+  } else if (!isAccountOpsReady() && !cloudEnabled()) {
+    setAccountOpsReady(true);
+  }
   if (!wasLive) {
     void ensureAccountLocalStore(
       {
@@ -1044,7 +1052,7 @@ function enqueueLogoutPurge(reason) {
       if (seq !== accountOpSeq) return;
       const result = await flushAndPurgeActiveAccount(reason);
       if (!result?.ok && !result?.skipped && uidSnapshot) {
-        // 数据安全优先：失败不删；持续后台重试
+        // 推送失败：保留本地，后台只重试 flush，不删库
         scheduleBackgroundPurge(uidSnapshot, reason);
       }
     }, async () => {
@@ -1055,7 +1063,7 @@ function enqueueLogoutPurge(reason) {
       }
     })
     .catch((err) => {
-      console.warn('[bili-pet] logout purge failed:', err?.message || err);
+      console.warn('[bili-pet] logout flush failed:', err?.message || err);
       if (uidSnapshot) scheduleBackgroundPurge(uidSnapshot, reason);
     });
 }
@@ -1072,11 +1080,12 @@ async function flushAndPurgeActiveAccount(reason = 'logout_push') {
     setActiveUid(uidToPurge);
   }
 
-  const result = await flushAndPurgeUid(uidToPurge, reason);
-  if (!result.ok) {
-    // push/purge 失败也不留挂载：访问门闩靠 sessionLoggedIn，但卸库更稳妥
-    if (getActiveUid()) setActiveUid(null);
-    else closeNotesDb();
+  const result = await flushAndPurgeUid(uidToPurge, reason, { purgeLocal: false });
+  // 无论推送是否完全成功，都卸挂载并清绑定；本地库文件保留
+  if (getActiveUid()) setActiveUid(null);
+  else closeNotesDb();
+
+  if (!result.ok && !result.skipped) {
     broadcastPetEvent(
       {
         v: 1,
@@ -1086,9 +1095,16 @@ async function flushAndPurgeActiveAccount(reason = 'logout_push') {
         uid: uidToPurge,
         error: result.error || 'purge_blocked',
         reason: result.error || 'purge_blocked',
+        keptLocal: true,
       },
       { touchLatest: false }
     );
+    clearBinding();
+    noteContext = null;
+    latestEvent = null;
+    flushStudyClock();
+    studyClock = null;
+    closeAccountWindows();
     return result;
   }
 
@@ -1107,10 +1123,11 @@ async function flushAndPurgeActiveAccount(reason = 'logout_push') {
       uid: uidToPurge,
       reason,
       ok: true,
+      keptLocal: true,
     },
     { touchLatest: false }
   );
-  return result;
+  return { ...result, keptLocal: true };
 }
 
 async function ensureAccountLocalStore(gate, payload = {}) {
@@ -1234,7 +1251,7 @@ async function ensureAccountLocalStore(gate, payload = {}) {
       { touchLatest: false }
     );
 
-    if (result.opsReady !== false) {
+    if (result.opsReady) {
       broadcastPetEvent(
         {
           v: 1,
@@ -1245,6 +1262,7 @@ async function ensureAccountLocalStore(gate, payload = {}) {
           prevUid,
           switched,
           ok: true,
+          dataPullDone: true,
         },
         { touchLatest: false }
       );
@@ -1357,21 +1375,23 @@ function onBridgeEvent(payload) {
 
     if (gate.ok && gate.uid && gate.status === 'auto_bound') {
       setActiveUid(gate.uid);
-      setAccountOpsReady(true);
+      setAccountOpsReady(!cloudEnabled());
       saveAccountSessionLoggedIn(gate.uid);
       void ensureAccountLocalStore(gate, payload);
     } else if (gate.ok && gate.uid && gate.status === 'switched') {
       void ensureAccountLocalStore(gate, payload);
     } else if (gate.ok && gate.status === 'logged_in') {
       const wasLive =
-        Boolean(loadAccount().sessionLoggedIn) &&
-        getActiveUid() === gate.uid &&
-        isAccountOpsReady();
+        Boolean(loadAccount().sessionLoggedIn) && getActiveUid() === gate.uid;
       if (!wasLive) accountOpSeq += 1;
       if (!getActiveUid() && gate.uid) {
         setActiveUid(gate.uid);
       }
-      setAccountOpsReady(true);
+      if (!wasLive) {
+        setAccountOpsReady(!cloudEnabled());
+      } else if (!isAccountOpsReady() && !cloudEnabled()) {
+        setAccountOpsReady(true);
+      }
       saveAccountSessionLoggedIn(gate.uid);
       if (!wasLive) {
         void ensureAccountLocalStore(gate, payload);
@@ -1937,11 +1957,12 @@ if (gotTheLock) {
     startCloudSync({
       onBroadcast: (event) => {
         broadcastPetEvent(event, { touchLatest: false });
-        // First-pull eventually succeeded via retry → refresh open KB windows
+        // 首拉失败后重试成功：放行知识库并刷新已打开窗口
         if (
           event?.kind === 'sync_state' &&
-          event.status === 'account_switched' &&
+          event.status === 'ready' &&
           event.opsReady &&
+          event.dataPullDone &&
           event.retried
         ) {
           broadcastPetEvent(
@@ -1953,9 +1974,24 @@ if (gotTheLock) {
               uid: event.uid,
               ok: true,
               retried: true,
+              dataPullDone: true,
             },
             { touchLatest: false }
           );
+          if (homeWindow && !homeWindow.isDestroyed()) {
+            try {
+              homeWindow.reload();
+            } catch (err) {
+              console.warn('[bili-pet] home reload after pull retry failed:', err?.message || err);
+            }
+          }
+          if (notesWindow && !notesWindow.isDestroyed()) {
+            try {
+              notesWindow.reload();
+            } catch (err) {
+              console.warn('[bili-pet] notes reload after pull retry failed:', err?.message || err);
+            }
+          }
         }
       },
     });

@@ -23,6 +23,7 @@ const {
   handleAcceptNote,
   handleRejectNote,
 } = require('./note-share');
+const { handleLlmChatCompletions, llmConfigured } = require('./llm-proxy');
 
 const app = express();
 app.use(express.json({ limit: '12mb' }));
@@ -37,11 +38,22 @@ function wrap(name, fn) {
 }
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'bili-pet-cloud-api', ts: Date.now() });
+  res.json({
+    ok: true,
+    service: 'bili-pet-cloud-api',
+    ts: Date.now(),
+    llmProxy: llmConfigured(),
+  });
 });
 
 app.post('/auth/bili', wrap('auth/bili', handleAuthBili));
 app.post('/auth/device', wrap('auth/device', handleAuthDevice));
+
+app.post(
+  '/llm/chat/completions',
+  authMiddleware,
+  wrap('llm/chat', handleLlmChatCompletions)
+);
 
 app.get('/kb/revision', authMiddleware, wrap('kb/revision', handleKbRevision));
 app.get('/kb/changes', authMiddleware, wrap('kb/changes', handleKbChanges));
