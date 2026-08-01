@@ -4,6 +4,12 @@ const path = require('path');
 const { initAppPaths, dataPath, ensureEnvFile } = require('./paths');
 const { loadEnv } = require('./load-env');
 
+const APP_ICON = path.join(
+  __dirname,
+  'assets',
+  process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+);
+
 // Writable data must resolve before DB / token / cookie modules load.
 app.setName('BiliOtter');
 initAppPaths(app);
@@ -295,6 +301,7 @@ async function goHome(opts = {}) {
   const bounds = homePageBounds();
   homeWindow = new BrowserWindow({
     ...bounds,
+    icon: APP_ICON,
     frame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -578,6 +585,7 @@ function openNotesWindow() {
   const bounds = notesPageBounds();
   notesWindow = new BrowserWindow({
     ...bounds,
+    icon: APP_ICON,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -645,6 +653,7 @@ function openChatWindow() {
   const bounds = chatPageBounds();
   chatWindow = new BrowserWindow({
     ...bounds,
+    icon: APP_ICON,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -695,6 +704,7 @@ function openFriendsWindow() {
   const bounds = friendsPageBounds();
   friendsWindow = new BrowserWindow({
     ...bounds,
+    icon: APP_ICON,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -723,6 +733,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: PET_WINDOW.width,
     height: PET_WINDOW.height,
+    icon: APP_ICON,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -1914,6 +1925,14 @@ ipcMain.on('pet:moveBy', (event, dx, dy) => {
 
 if (gotTheLock) {
   app.whenReady().then(async () => {
+    if (process.platform === 'darwin' && app.dock && fs.existsSync(APP_ICON)) {
+      try {
+        app.dock.setIcon(APP_ICON);
+      } catch (err) {
+        console.warn('[bili-pet] dock icon:', err.message || err);
+      }
+    }
+
     protocol.handle('bilinotes', async (request) => {
       try {
         const full = resolveBilinotesUrl(request.url);

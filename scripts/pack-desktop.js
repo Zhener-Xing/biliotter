@@ -183,6 +183,38 @@ function injectAppIntoResources(resourcesDir) {
   return copyBridge(resourcesDir);
 }
 
+function applyMacAppIcon(destApp) {
+  const icns = path.join(root, 'assets', 'icon.icns');
+  if (!fs.existsSync(icns)) {
+    console.warn('[pack] assets/icon.icns missing — keeping Electron default icon');
+    return;
+  }
+  const dest = path.join(destApp, 'Contents', 'Resources', 'electron.icns');
+  fs.copyFileSync(icns, dest);
+  console.log('[pack] applied Mac app icon');
+}
+
+function applyWinExeIcon(exePath) {
+  const ico = path.join(root, 'assets', 'icon.ico');
+  if (!fs.existsSync(ico) || !fs.existsSync(exePath)) {
+    console.warn('[pack] Windows icon skipped (missing icon.ico or exe)');
+    return;
+  }
+  // Embedding into .exe needs rcedit; cross-pack from macOS usually lacks Wine.
+  if (process.platform !== 'win32') {
+    console.warn(
+      '[pack] Windows .exe icon not embedded on this host; runtime window icon still uses assets/icon.ico'
+    );
+    return;
+  }
+  const r = spawnSync('npx.cmd', ['--yes', 'rcedit', exePath, '--set-icon', ico], {
+    stdio: 'inherit',
+    shell: true,
+  });
+  if (r.status === 0) console.log('[pack] applied Windows exe icon');
+  else console.warn('[pack] rcedit failed — exe may keep default Electron icon');
+}
+
 function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -312,6 +344,7 @@ function packMacFromLocal(outDir) {
   copyAppBundle(electronApp, destApp);
   const resources = path.join(destApp, 'Contents', 'Resources');
   const bridge = injectAppIntoResources(resources);
+  applyMacAppIcon(destApp);
 
   try {
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', destApp], {
@@ -349,6 +382,7 @@ function packWinFromDist(electronDist, outDir) {
   const from = path.join(outDir, 'electron.exe');
   const to = path.join(outDir, 'BiliOtter.exe');
   if (fs.existsSync(from)) fs.renameSync(from, to);
+  applyWinExeIcon(to);
 
   return { destApp: path.join(outDir, 'BiliOtter.exe'), bridge, resources };
 }
@@ -396,6 +430,7 @@ async function main() {
     const destApp = path.join(outDir, 'BiliOtter.app');
     copyAppBundle(path.join(dist, 'Electron.app'), destApp);
     const bridge = injectAppIntoResources(path.join(destApp, 'Contents', 'Resources'));
+    applyMacAppIcon(destApp);
     result = {
       destApp,
       bridge,
