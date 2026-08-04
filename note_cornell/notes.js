@@ -17,6 +17,9 @@ const shareCancel = document.getElementById('notes-share-cancel');
 
 let currentBvid = null;
 let currentTitle = '';
+let lastSavedTitle = '';
+/** 用户改过标题或已从库载入后，跟播事件不再覆盖 */
+let titleLocked = false;
 let applyingRemote = false;
 let saveTimer = null;
 let previewTimer = null;
@@ -34,19 +37,28 @@ function setStatus(text) {
   if (statusEl) statusEl.textContent = text || '';
 }
 
-function setHeading(title, { persistFull = true } = {}) {
+function setHeading(title, { persistFull = true, lock = false } = {}) {
   const full = String(title || '').trim();
-  if (persistFull && full) currentTitle = full;
+  if (persistFull) currentTitle = full;
   if (!headingEl) return;
-  const shown = (persistFull ? currentTitle || full : full) || '笔记';
-  headingEl.textContent = shown.slice(0, 48);
-  if (shown.length > 48) headingEl.title = shown;
-  else headingEl.removeAttribute('title');
+  const shown = (persistFull ? currentTitle : full) || '';
+  if (document.activeElement === headingEl) return;
+  headingEl.value = shown;
+  headingEl.title = shown || '点击修改标题';
+  if (lock && shown) titleLocked = true;
+}
+
+function applyAutoTitle(title) {
+  if (titleLocked) return;
+  const next = String(title || '').trim();
+  if (!next) return;
+  setHeading(next);
 }
 
 function setOrganizingUi(on) {
   organizing = Boolean(on);
   if (editorEl) editorEl.readOnly = organizing;
+  if (headingEl) headingEl.readOnly = organizing;
   sheetEl?.classList.toggle('is-organizing', organizing);
   if (organizing) organizeBtn?.setAttribute('disabled', '');
   else organizeBtn?.removeAttribute('disabled');
@@ -227,7 +239,9 @@ function setDocument({
   force = false,
 } = {}) {
   if (bvid) currentBvid = bvid;
-  if (title || notes?.title) setHeading(title || notes.title);
+  if (title || notes?.title) {
+    setHeading(title || notes.title, { lock: Boolean(fromDb) });
+  }
 
   const md = rewriteLegacyAssetUrls(
     bodyMd != null
@@ -263,7 +277,7 @@ function savePayload() {
     bvid: currentBvid,
     mode: 'user',
     bodyMd: rewriteLegacyAssetUrls(editorEl?.value || ''),
-    title: currentTitle || headingEl?.textContent || '',
+    title: String(headingEl?.value || currentTitle || '').trim(),
   };
 }
 
@@ -274,13 +288,21 @@ async function persistNow() {
     return { ok: false, error: 'no_bvid' };
   }
   const payload = savePayload();
-  if (payload.bodyMd === lastSavedMd && !dirty) return { ok: true, skipped: true };
+  currentTitle = payload.title;
+  const titleChanged = payload.title !== lastSavedTitle;
+  const bodyUnchanged = payload.bodyMd === lastSavedMd;
+  if (bodyUnchanged && !dirty && !titleChanged) {
+    return { ok: true, skipped: true };
+  }
 
   const res = await window.biliPet.notesSave(payload);
   if (res?.ok) {
     lastSavedMd = payload.bodyMd;
+    lastSavedTitle = payload.title;
     dirty = false;
-    if (!res.skipped) setStatus('已保存');
+    if (!res.skipped) {
+      setStatus(titleChanged && bodyUnchanged ? '标题已保存' : '已保存');
+    }
   } else {
     setStatus(`保存失败：${res?.error || 'unknown'}`);
   }
@@ -291,12 +313,17 @@ function flushSaveSync() {
   clearTimeout(saveTimer);
   saveTimer = null;
   if (!currentBvid || !window.biliPet?.notesSaveSync) return { ok: false };
-  if (!dirty && editorEl?.value === lastSavedMd) return { ok: true, skipped: true };
   const payload = savePayload();
+  currentTitle = payload.title;
+  const titleChanged = payload.title !== lastSavedTitle;
+  if (!dirty && editorEl?.value === lastSavedMd && !titleChanged) {
+    return { ok: true, skipped: true };
+  }
   try {
     const res = window.biliPet.notesSaveSync(payload);
     if (res?.ok) {
       lastSavedMd = payload.bodyMd;
+      lastSavedTitle = payload.title;
       dirty = false;
     }
     return res || { ok: false };
@@ -422,11 +449,15 @@ async function switchToBvid(nextBvid, { title, status } = {}) {
     await flushSave();
     dirty = false;
     lastSavedMd = '';
+    lastSavedTitle = '';
+    titleLocked = false;
     if (editorEl) editorEl.value = '';
     renderMarkdown('');
+  } else if (!prev) {
+    titleLocked = false;
   }
   currentBvid = key;
-  if (title) setHeading(title);
+  if (title && !titleLocked) setHeading(title);
   const res = await window.biliPet?.notesLoad?.(key);
   if (res?.doc) {
     setDocument({
@@ -437,7 +468,10 @@ async function switchToBvid(nextBvid, { title, status } = {}) {
         status ||
         (prev && prev !== key ? '已切换到新视频笔记' : '已载入本片笔记'),
     });
+    lastSavedTitle = String(res.doc.title || '').trim();
   } else {
+    if (title) setHeading(title);
+    lastSavedTitle = String(currentTitle || '').trim();
     setStatus(
       status ||
         (prev && prev !== key ? '新视频：开始手写笔记吧' : '开始手写笔记吧')
@@ -474,18 +508,21 @@ function handleEvent(payload) {
     case 'session_start': {
       const next =
         payload.bvid || payload.modelInput?.video?.bvid || currentBvid;
+      const switched = Boolean(currentBvid && next && currentBvid !== next);
+      const page = Number(payload.page || payload.modelInput?.video?.page || 0);
       void switchToBvid(next, {
         title: payload.title || payload.modelInput?.video?.title,
-        status:
-          currentBvid && next && currentBvid !== next
-            ? '已切换到新视频笔记'
-            : '新会话开始，可手写笔记',
+        status: switched
+          ? page > 1
+            ? `已切换到第 ${page} 集笔记`
+            : '已切换到新视频笔记'
+          : '新会话开始，可手写笔记',
       });
       break;
     }
 
     case 'session_meta':
-      if (payload.title) setHeading(payload.title);
+      applyAutoTitle(payload.title);
       if (payload.bvid && payload.bvid !== currentBvid) {
         void switchToBvid(payload.bvid, { title: payload.title });
       } else if (payload.bvid) {
@@ -495,7 +532,7 @@ function handleEvent(payload) {
 
     case 'progress':
     case 'heartbeat':
-      if (payload.title) setHeading(payload.title);
+      applyAutoTitle(payload.title);
       if (payload.bvid) currentBvid = payload.bvid;
       break;
 
@@ -578,6 +615,27 @@ editorEl?.addEventListener('input', () => {
   dirty = true;
   schedulePreview();
   scheduleSave();
+});
+
+headingEl?.addEventListener('input', () => {
+  if (applyingRemote || organizing) return;
+  titleLocked = true;
+  currentTitle = String(headingEl.value || '').trim();
+  dirty = true;
+  scheduleSave();
+});
+
+headingEl?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    headingEl.blur();
+    editorEl?.focus();
+  }
+});
+
+headingEl?.addEventListener('blur', () => {
+  currentTitle = String(headingEl?.value || '').trim();
+  void persistNow();
 });
 
 window.addEventListener('beforeunload', () => {

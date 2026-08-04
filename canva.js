@@ -100,6 +100,7 @@ const STUDY_SWITCH_REASONS = new Set([
   'window_blur',
   'route_change',
   'switch_bvid',
+  'switch_page',
 ]);
 
 /** 知识区 / 学习相关分区（与扩展侧保持一致） */
@@ -487,6 +488,14 @@ function updateNoteContext(payload) {
 
   const bvid = eventBvid(payload);
   const prevBvid = eventBvid(noteContext);
+  const page =
+    payload.page ??
+    payload.modelInput?.video?.page ??
+    null;
+  const prevPage =
+    noteContext?.page ??
+    noteContext?.modelInput?.video?.page ??
+    null;
   const transcript = String(payload.transcriptText || '').trim();
   const fullSubtitle = String(payload.fullSubtitleText || '').trim();
   const contextText = String(
@@ -496,8 +505,15 @@ function updateNoteContext(payload) {
       ''
   ).trim();
   const switchedBvid = Boolean(bvid && prevBvid && bvid !== prevBvid);
+  const switchedPage = Boolean(
+    !switchedBvid &&
+      bvid &&
+      page != null &&
+      prevPage != null &&
+      Number(page) !== Number(prevPage)
+  );
 
-  if (switchedBvid) {
+  if (switchedBvid || switchedPage) {
     noteContext = { ...payload };
     return;
   }
@@ -1091,8 +1107,8 @@ async function flushAndPurgeActiveAccount(reason = 'logout_push') {
     setActiveUid(uidToPurge);
   }
 
-  const result = await flushAndPurgeUid(uidToPurge, reason, { purgeLocal: false });
-  // 无论推送是否完全成功，都卸挂载并清绑定；本地库文件保留
+  const result = await flushAndPurgeUid(uidToPurge, reason);
+  // 无论推送是否完全成功，都卸挂载并清绑定；本地库文件永久保留
   if (getActiveUid()) setActiveUid(null);
   else closeNotesDb();
 

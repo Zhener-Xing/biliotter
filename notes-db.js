@@ -194,37 +194,22 @@ function listUidDbFilesOnDisk() {
 }
 
 /**
- * Close DB if active, delete this uid's SQLite files (+ wal/shm) and note assets.
+ * Close DB if active. Destructive local wipe is disabled — knowledge base
+ * SQLite files are kept forever across logout / account switch.
+ * Kept for test scripts only; production must not call this.
  */
 function purgeUidLocalStore(uid) {
   const id = normalizeUid(uid);
   if (!id) return { ok: false, error: 'no_uid' };
-  const file = dbPathForUid(id);
-  const assetBvids = readBvidsFromUidFile(id);
-
+  console.warn(
+    `[bili-pet] purgeUidLocalStore ignored (local KB retained) uid=${id}`
+  );
   if (activeUid === id) {
     closeNotesDb();
     activeUid = null;
     activeDbFile = getLegacyDbFile();
   }
-
-  const removedAssets = removeNoteAssetsForBvids(assetBvids);
-  const removed = [...removedAssets];
-  for (const p of [file, `${file}-wal`, `${file}-shm`]) {
-    try {
-      if (fs.existsSync(p)) {
-        fs.unlinkSync(p);
-        removed.push(p);
-      }
-    } catch (err) {
-      console.warn('[bili-pet] purge unlink failed:', p, err.message || err);
-      return { ok: false, error: err.message || String(err), uid: id };
-    }
-  }
-  console.log(
-    `[bili-pet] purged local store uid=${id} files=${removed.length} assets=${removedAssets.length}`
-  );
-  return { ok: true, uid: id, removed, removedAssets };
+  return { ok: true, uid: id, removed: [], removedAssets: [], keptLocal: true };
 }
 
 function normalizeMode(mode) {
@@ -1474,14 +1459,50 @@ function makeCourseFolderId() {
   return `cf_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function parseNoteKey(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return { bvid: '', page: 1 };
+  const keyed = raw.match(/^(BV[\w]+)#p(\d+)$/i);
+  if (keyed) {
+    return { bvid: keyed[1], page: Math.max(1, Number(keyed[2]) || 1) };
+  }
+  const fromUrl = raw.match(/BV[\w]+/i);
+  if (fromUrl) {
+    const pageM = raw.match(/[?&]p=(\d+)/i);
+    return {
+      bvid: fromUrl[0],
+      page: pageM ? Math.max(1, Number(pageM[1]) || 1) : 1,
+    };
+  }
+  if (/^BV[\w]+$/i.test(raw)) return { bvid: raw, page: 1 };
+  return { bvid: '', page: 1 };
+}
+
+function makeNoteKey(bvid, page = 1) {
+  const bv = String(bvid || '').trim().match(/BV[\w]+/i)?.[0] || '';
+  if (!bv) return '';
+  const p = Math.max(1, Number(page) || 1);
+  return p <= 1 ? bv : `${bv}#p${p}`;
+}
+
+function bareBvid(input) {
+  return parseNoteKey(input).bvid;
+}
+
+function biliVideoUrl(input) {
+  const { bvid, page } = parseNoteKey(input);
+  if (!bvid) return '';
+  const base = `https://www.bilibili.com/video/${bvid}`;
+  return page > 1 ? `${base}?p=${page}` : base;
+}
+
 function normalizeBvid(input) {
   const raw = String(input || '').trim();
   if (!raw) return '';
-  const fromUrl = raw.match(/BV[\w]+/i);
-  if (fromUrl) return fromUrl[0];
-  if (/^BV[\w]+$/i.test(raw)) return raw;
-  return '';
-}//解析BVID
+  const { bvid, page } = parseNoteKey(raw);
+  if (!bvid) return '';
+  return makeNoteKey(bvid, page);
+}//解析笔记 key（含分P）
 
 function parseMetaJson(raw) {
   try {
@@ -1580,7 +1601,7 @@ function listItemsForGroup(database, groupId) {
       hasNote,
       noteTitle: noteTitle || null,
       noteUpdatedAt: hasNote ? Number(r.note_updated_at) || 0 : null,
-      url: `https://www.bilibili.com/video/${r.bvid}`,
+      url: biliVideoUrl(r.bvid) || `https://www.bilibili.com/video/${bareBvid(r.bvid) || r.bvid}`,
     };
   });
 }
@@ -2722,7 +2743,7 @@ function rowToDoc(row) {
 }
 
 function loadNoteDoc(bvid) {
-  const key = String(bvid || '').trim();
+  const key = normalizeBvid(bvid) || String(bvid || '').trim();
   if (!key) return null;
   if (hasTombstone('note', key)) return null;
   try {
@@ -2739,7 +2760,7 @@ function loadNoteDoc(bvid) {
 }//加载函数，没啥用，放着就行
 
 function saveNoteDoc(bvid, patch = {}) {
-  const key = String(bvid || '').trim();
+  const key = normalizeBvid(bvid) || String(bvid || '').trim();
   if (!key) return null;
 
   const existing = loadNoteDoc(key);
@@ -2808,6 +2829,8 @@ function saveNoteDoc(bvid, patch = {}) {
 
 function safeAssetKey(bvid) {
   const key = String(bvid || '').trim();
+  // 分P 笔记 BVxxx#pN → 目录名 BVxxx_pN
+  if (/^BV[\w]+#p\d+$/i.test(key)) return key.replace(/#p/i, '_p');
   if (/^BV[\w]+$/i.test(key)) return key;
   if (/^[\w.-]+$/.test(key) && !key.includes('..')) return key;
   return '_draft';
@@ -2886,7 +2909,7 @@ function searchNotes(query, { limit = 20 } = {}) {
 }
 
 function deleteNoteDoc(bvid) {
-  const key = String(bvid || '').trim();
+  const key = normalizeBvid(bvid) || String(bvid || '').trim();
   if (!key) return { ok: false, error: 'no_bvid' };
   try {
     const database = getDb();
@@ -2979,6 +3002,10 @@ module.exports = {
   buildPendingPushPayload,
   applyRemoteChanges,
   normalizeBvid,
+  parseNoteKey,
+  makeNoteKey,
+  bareBvid,
+  biliVideoUrl,
   listCourseGroups,
   getCourseGroup,
   createCourseGroup,

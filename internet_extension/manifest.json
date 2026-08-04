@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bili Pet Bridge",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "记录 B 站观看进度与字幕，检测离开视频等专注中断，并实时同步给桌面宠物",
   "permissions": [
     "storage",

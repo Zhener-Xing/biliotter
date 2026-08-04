@@ -73,10 +73,29 @@ body {
 }
 
 .notes-title {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
   font-size: 14px;
   line-height: 1.5;
   color: #3b2a1f;
   text-shadow: 2px 2px 0 rgba(176, 122, 69, 0.35);
+  outline: none;
+  padding: 2px 0;
+  -webkit-app-region: no-drag;
+  user-select: text;
+  cursor: text;
+}
+
+.notes-title::placeholder {
+  color: #a88b72;
+  text-shadow: none;
+}
+
+.notes-title:focus {
+  border-bottom: 2px solid #b07a45;
 }
 
 .notes-status {

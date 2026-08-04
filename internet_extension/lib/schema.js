@@ -1,8 +1,17 @@
 const BiliSchema = (() => {
   const cfg = () => globalThis.BILI_PET_CONFIG || {};
 
-  function newSessionId(bvid) {
-    return `sess_${bvid || 'unknown'}_${Date.now().toString(36)}_${Math.random()
+  /** P1 用裸 BV；P2+ 为 BVxxx#pN，与桌面笔记主键一致 */
+  function makeNoteKey(bvid, page = 1) {
+    const bv = String(bvid || '').trim().match(/BV[\w]+/i)?.[0] || '';
+    if (!bv) return '';
+    const p = Math.max(1, Number(page) || 1);
+    return p <= 1 ? bv : `${bv}#p${p}`;
+  }
+
+  function newSessionId(bvid, page = 1) {
+    const key = makeNoteKey(bvid, page) || bvid || 'unknown';
+    return `sess_${key}_${Date.now().toString(36)}_${Math.random()
       .toString(36)
       .slice(2, 8)}`;
   }
@@ -67,7 +76,7 @@ const BiliSchema = (() => {
     };
   }
 
-  return { newSessionId, envelope, contextText, buildModelInput };
+  return { newSessionId, envelope, contextText, buildModelInput, makeNoteKey };
 })();//返回BiliSchema对象，拼接json
 
 globalThis.BiliSchema = BiliSchema;

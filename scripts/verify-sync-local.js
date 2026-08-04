@@ -112,14 +112,15 @@ applyRemoteChanges({
 });
 assert(loadNoteDoc('BVverifyRemote1')?.title === 'Remote', 'remote apply failed');
 
-// purge: clear pending then delete local store
+// purge: 已禁用删库；只卸挂载，本地文件保留
 clearAllPending();
 assert(!hasPendingSync(), 'pending should be empty before purge');
 const dbFile = dbPathForUid(uidA);
 assert(fs.existsSync(dbFile), 'A db should exist before purge');
 const purged = purgeUidLocalStore(uidA);
 assert(purged.ok, `purge failed: ${purged.error}`);
-assert(!fs.existsSync(dbFile), 'A db should be deleted after purge');
+assert(purged.keptLocal, 'purge should keep local KB');
+assert(fs.existsSync(dbFile), 'A db must remain after purge (no local wipe)');
 assert(getActiveUid() == null, 'activeUid cleared after purge of active store');
 clearBinding();
 assert(loadAccount().activeUid == null, 'binding cleared');
@@ -127,6 +128,9 @@ assert(loadAccount().activeUid == null, 'binding cleared');
 commitBinding(uidB);
 setActiveUid(uidB);
 assert(loadNoteDoc('BVverifyBBB1')?.title === 'B note', 'B note should still exist');
+setActiveUid(uidA);
+assert(loadNoteDoc('BVverifyAAA1')?.title === 'A note', 'A note should still exist after keep-local purge');
+setActiveUid(uidB);
 
 closeNotesDb();
 cleanup();

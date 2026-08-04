@@ -445,6 +445,7 @@ function buildNotesUserPayload(payload, transcriptOverride = null) {
       title: video.title || payload.title || '',
       owner: video.owner || '',
       bvid: video.bvid || payload.bvid || '',
+      page: video.page || payload.page || 1,
       part: video.part || '',
       duration: video.duration || 0,
     },

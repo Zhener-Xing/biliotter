@@ -13,6 +13,7 @@
     enabled: true,
     sessionId: null,
     bvid: null,
+    page: null,
     cid: null,
     title: '',
     owner: '',
@@ -53,6 +54,20 @@
     const m = location.search.match(/[?&]p=(\d+)/);
     return m ? Number(m[1]) : 1;
   }//解析页码
+
+  /** 桌面笔记主键：同分多 P 用 BVxxx#pN */
+  function noteKey(bvid = state.bvid, page = state.page) {
+    return schema.makeNoteKey(bvid, page ?? parsePage());
+  }
+
+  function formatDisplayTitle(meta = {}) {
+    const title = String(meta.title || state.title || '').trim();
+    const page = Math.max(1, Number(meta.page) || 1);
+    const part = String(meta.part || '').trim();
+    if (page <= 1 || !title) return title;
+    if (part && part !== title) return `${title} · P${page} ${part}`;
+    return `${title} · P${page}`;
+  }
 
   function findVideoElement() {
     return (
@@ -99,9 +114,11 @@
   function getContext() {
     const el = state.videoEl;
     const meta = state.videoMeta || {};
+    const page = state.page ?? meta.page ?? parsePage();
     return {
       sessionId: state.sessionId,
-      bvid: state.bvid,
+      bvid: noteKey(state.bvid, page),
+      page,
       cid: state.cid,
       title: state.title,
       currentTime: el?.currentTime ?? state.lastTime,
@@ -197,7 +214,8 @@
       if (token !== state.loadToken || state.bvid !== lockedBvid) return null;
 
       state.cid = meta.cid;
-      state.title = meta.title;
+      state.page = meta.page || page;
+      state.title = formatDisplayTitle(meta);
       state.owner = meta.owner || '';
       state.studyRelated = isStudyRelatedMeta(meta);
       state.videoMeta = {
@@ -216,7 +234,7 @@
         studyRelated: state.studyRelated,
       };
 
-      const pack = await BiliSubtitle.load(lockedBvid, meta.cid, { force });
+      const pack = await BiliSubtitle.load(lockedBvid, meta.cid, { force, page });
       if (token !== state.loadToken || state.bvid !== lockedBvid) return null;
       if (!packIsForCurrent(pack)) return null;
 
@@ -259,7 +277,8 @@
           scope: 'subtitle',
           message: String(err.message || err),
           sessionId: state.sessionId,
-          bvid: state.bvid,
+          bvid: noteKey(),
+          page: state.page ?? parsePage(),
         })
       );
       scheduleSubtitleRetries();
@@ -375,7 +394,8 @@
       schema.envelope('session_end', {
         priority: 'high',
         sessionId: state.sessionId,
-        bvid: state.bvid,
+        bvid: noteKey(),
+        page: state.page ?? parsePage(),
         cid: state.cid,
         title: state.title,
         currentTime: state.videoEl?.currentTime ?? state.lastTime,
@@ -393,25 +413,37 @@
 
     const bvid = parseBvid();
     if (!bvid) return;
+    const page = parsePage();
 
-    if (state.sessionId && state.bvid && state.bvid !== bvid) {
+    const bvidChanged = Boolean(state.sessionId && state.bvid && state.bvid !== bvid);
+    const pageChanged = Boolean(
+      state.sessionId &&
+        state.bvid === bvid &&
+        state.page != null &&
+        Number(state.page) !== Number(page)
+    );
+
+    if (bvidChanged || pageChanged) {
+      const reason = bvidChanged ? 'switch_bvid' : 'switch_page';
       BiliActions.emit('exit_video', {
-        reason: 'switch_bvid',
+        reason,
         nextBvid: bvid,
+        nextPage: page,
         ...getContext(),
         force: true,
       });
-      endSession('switch_bvid');
+      endSession(reason);
       BiliSubtitle.clearCache(state.bvid);
     }
 
     stopSubtitleRetries();
     state.loadToken += 1;
     state.bvid = bvid;
+    state.page = page;
     state.cid = null;
     state.videoMeta = null;
     state.studyRelated = null;
-    state.sessionId = schema.newSessionId(bvid);
+    state.sessionId = schema.newSessionId(bvid, page);
     state.subtitlePack = null;
     state.lastLineKey = '';
     state.lastTime = -1;
@@ -423,9 +455,9 @@
       schema.envelope('session_start', {
         priority: 'high',
         sessionId: state.sessionId,
-        bvid,
+        bvid: noteKey(bvid, page),
+        page,
         url: location.pathname + location.search,
-        page: parsePage(),
         transcriptText: '',
       })
     );

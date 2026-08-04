@@ -11,7 +11,6 @@ const {
   applyRemoteChanges,
   setActiveUid,
   getActiveUid,
-  purgeUidLocalStore,
   localDbExists,
   hasLocalKbData,
   dbPathForUid,
@@ -618,7 +617,7 @@ async function runFirstPullGate({
   return { ok: true, uid: id, pulled: true, reason: decision.reason };
 }
 
-async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false, purgeLocal = false } = {}) {
+async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false } = {}) {
   const id = String(uid || '').trim();
   if (!id) return { ok: true, skipped: true, reason: 'no_uid' };
 
@@ -638,12 +637,8 @@ async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false, purgeLoc
     });
   };
 
-  // 未配云端：保留本地库，直接成功（不再因 cloud_disabled 卡住退出）
+  // 未配云端：保留本地库，直接成功
   if (!cloudEnabled()) {
-    if (purgeLocal) {
-      emitBlocked({ reason: 'cloud_disabled' });
-      return { ok: false, error: 'cloud_disabled' };
-    }
     return { ok: true, uid: id, skipped: true, reason: 'cloud_disabled_keep_local', keptLocal: true };
   }
 
@@ -653,22 +648,11 @@ async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false, purgeLoc
     const session = loadTokenForUid(id) || (resumeUid === id ? loadToken() : null);
     const remountingOther = Boolean(resumeUid && resumeUid !== id);
 
-    // 无 token：仍保留本地；退出流程不应因此反复重试删库
+    // 无 token：仍保留本地；退出流程不应因此反复重试
     if (!session?.token) {
-      if (purgeLocal) {
-        emitBlocked({ reason: 'no_token' });
-        return { ok: false, error: 'no_token' };
-      }
       return { ok: true, uid: id, skipped: true, reason: 'no_token_keep_local', keptLocal: true };
     }
     if (session.uid !== id) {
-      if (purgeLocal) {
-        emitBlocked({
-          reason: 'token_uid_mismatch',
-          tokenUid: session.uid,
-        });
-        return { ok: false, error: 'token_uid_mismatch' };
-      }
       return {
         ok: true,
         uid: id,
@@ -711,22 +695,7 @@ async function flushAndPurgeUid(uid, reason = 'purge', { quiet = false, purgeLoc
         return { ok: false, error: 'pending_remaining' };
       }
 
-      // 默认保留本地 SQLite，避免每次退出后再全量云端拉取
-      if (purgeLocal) {
-        const purged = purgeUidLocalStore(id);
-        if (!purged.ok) {
-          emitBlocked({ reason: purged.error || 'purge_failed' });
-          return { ok: false, error: purged.error || 'purge_failed' };
-        }
-        clearTokenForUid(id);
-        if (!quiet) {
-          emitSyncState('account_purged', { uid: id, purgeReason: reason, keptLocal: false });
-        } else {
-          console.log(`[bili-pet] background purged uid=${id} (${reason})`);
-        }
-        return { ok: true, uid: id, keptLocal: false };
-      }
-
+      // 永久保留本地 SQLite：退出/换号只推云端，绝不删库
       if (!quiet) {
         emitSyncState('account_flushed', {
           uid: id,

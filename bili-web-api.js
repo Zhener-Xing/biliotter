@@ -1,7 +1,7 @@
 'use strict';
 
 const fs = require('fs');
-const { normalizeBvid } = require('./notes-db');
+const { normalizeBvid, bareBvid } = require('./notes-db');
 const { dataPath } = require('./paths');
 
 const UA =
@@ -205,7 +205,7 @@ async function biliRequest(url, { method = 'GET', body = null, form = null } = {
 
 async function resolveVideoMeta(bvidOrAid) {
   const raw = String(bvidOrAid || '').trim();
-  const bvid = normalizeBvid(raw);
+  const bvid = bareBvid(raw) || normalizeBvid(raw);
   if (!bvid && !/^\d+$/.test(raw)) {
     return { ok: false, error: 'invalid_bvid', message: '无效的视频号' };
   }
@@ -220,7 +220,7 @@ async function resolveVideoMeta(bvidOrAid) {
 
   const d = result.data || {};
   const aid = Number(d.aid);
-  const id = normalizeBvid(d.bvid) || bvid;
+  const id = bareBvid(d.bvid) || bvid;
   if (!aid || !id) {
     return { ok: false, error: 'not_found', message: '找不到该视频' };
   }
@@ -288,7 +288,7 @@ async function addToWatchLaterLocal(bvid) {
 }
 
 async function addToWatchLater(bvid) {
-  const key = normalizeBvid(bvid) || String(bvid || '').trim();
+  const key = bareBvid(bvid) || normalizeBvid(bvid) || String(bvid || '').trim();
   if (!key) {
     return { ok: false, error: 'invalid_bvid', message: '无效的视频号' };
   }
@@ -502,7 +502,7 @@ async function addToDefaultFavoriteLocal(bvid) {
 }
 
 async function addToDefaultFavorite(bvid) {
-  const key = normalizeBvid(bvid) || String(bvid || '').trim();
+  const key = bareBvid(bvid) || normalizeBvid(bvid) || String(bvid || '').trim();
   if (!key) {
     return { ok: false, error: 'invalid_bvid', message: '无效的视频号' };
   }

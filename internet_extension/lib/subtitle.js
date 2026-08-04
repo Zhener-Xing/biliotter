@@ -95,7 +95,7 @@ const BiliSubtitle = (() => {
       cid: target?.cid,
       page: target?.page || 1,
       part: target?.part || view.title,
-      duration: Number(view.duration) || Number(target?.duration) || 0,
+      duration: Number(target?.duration) || Number(view.duration) || 0,
       tid: view.tid ?? null,
       tname: view.tname || '',
       tid_v2: view.tid_v2 ?? view.tidv2 ?? null,
@@ -189,7 +189,8 @@ const BiliSubtitle = (() => {
     const key = `${bvid}:${cid}`;
     if (!opts.force && cache.has(key)) return cache.get(key);
 
-    const meta = await resolveCid(bvid);
+    const page = Math.max(1, Number(opts.page) || 1);
+    const meta = await resolveCid(bvid, page);
     const realCid = cid || meta.cid;
     if (!realCid) throw new Error('缺少 cid');
     if (meta.bvid && bvid && meta.bvid !== bvid) {

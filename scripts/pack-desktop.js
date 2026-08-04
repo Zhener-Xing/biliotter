@@ -320,12 +320,13 @@ function zipFolder(folderPath, zipPath) {
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
   const parent = path.dirname(folderPath);
   const base = path.basename(folderPath);
-  const r = spawnSync('zip', ['-r', '-q', zipPath, base], {
+  // info-zip 在 macOS 上常把中文名存成错误编码；bsdtar/libarchive 会带 UTF-8 标志
+  const r = spawnSync('tar', ['--format=zip', '-cf', zipPath, base], {
     cwd: parent,
     stdio: 'inherit',
   });
   if (r.status !== 0) {
-    throw new Error('zip failed — need `zip` on PATH');
+    throw new Error('zip failed — need `tar` (bsdtar/libarchive) on PATH');
   }
   return zipPath;
 }
