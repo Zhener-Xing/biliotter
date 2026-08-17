@@ -761,8 +761,14 @@ async function submitGameAnswer(choice) {
     }
 
     if (res.gameUi) {
-      renderGameUi(res.gameUi);
-      if (!res.waitingMore) setGameFeedback('');
+      const alreadyNext =
+        Boolean(res.waitingMore || res.gameUi.waitingMore) &&
+        lastGameUi?.mode === 'asking' &&
+        !lastGameUi.waitingMore &&
+        Number(lastGameUi.readyCount) > Number(res.gameUi.readyCount);
+      if (!alreadyNext) renderGameUi(res.gameUi);
+      if (!res.waitingMore && !res.gameUi.waitingMore) setGameFeedback('');
+      else if (alreadyNext) setGameFeedback('');
     }
   } catch (err) {
     setGameFeedback(err?.message || String(err), 'wrong');

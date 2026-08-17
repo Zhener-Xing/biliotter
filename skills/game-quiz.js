@@ -3,15 +3,18 @@ const {
   listCourseGroups,
   getCourseGroup,
   searchNotes,
+  searchNoteChunks,
+  listChunksForBvids,
   loadNoteDoc,
   normalizeBvid,
-  takeQuizBankQuestions,
 } = require('../notes-db');
 
 const MAX_TOPIC_NOTES = 8;
 const MAX_QUESTIONS = 5;
-/** 首包题量（题库不足时 LLM 当场生成；题库命中则有多少用多少、至少 1 题即开打） */
+/** 首包必须先凑齐的题量；随后后台补到 MAX_QUESTIONS */
 const EARLY_READY = 3;
+/** 开局多开几路，凑齐 EARLY_READY 就开打，其余继续跑完挂上 */
+const OPENING_RACE = 5;
 const START_LIVES = 3;
 const CORPUS_CHAR_LIMIT = 1700;
 const CORPUS_PER_NOTE = 360;
@@ -23,6 +26,11 @@ const CORPUS_SLIM_LIMIT = 1100;
 const CORPUS_FIRST_PACK_LIMIT = 1500;
 const GAME_SCOPE_TIMEOUT_MS = 12_000;
 const GAME_QUIZ_TIMEOUT_MS = 28_000;
+/** 一块一题：与默认 LLM_TIMEOUT 对齐，避免 12s 误杀慢代理 */
+const GAME_QUIZ_ONE_TIMEOUT_MS = 20_000;
+const MIN_QUIZ_CHUNK_CHARS = 72;
+const QUIZ_CHUNK_EXCERPT_LIMIT = 380;
+const QUIZ_JUNK_HEADING_RE = /^(线索|时间戳|目录|参考|链接|封面|comment)/i;
 const BV_RE = /BV[\w]+/i;
 const AI_ORG_STRIP_RE =
   /<!--\s*bili-pet:ai-organize:start\s*-->[\s\S]*?<!--\s*bili-pet:ai-organize:end\s*-->/gi;
@@ -73,9 +81,14 @@ function notifyPet(kind, payload = {}) {
  *   correctCount: number,
  *   backfilling: boolean,
  *   targetTotal: number,
+ *   openingBusy: boolean,
+ *   backfillStarted: boolean,
  * }} */
 let session = blankSession();
 let backfillToken = 0;
+let openingToken = 0;
+/** 开局竞速在 generating 阶段迟到的题，开打前再挂上 */
+let lateOpeningBuffer = [];
 
 function blankSession() {
   return {
@@ -90,15 +103,22 @@ function blankSession() {
     backfilling: false,
     targetTotal: MAX_QUESTIONS,
     endReason: null,
+    chunkQueue: [],
+    openingBusy: false,
+    backfillStarted: false,
   };
 }
 
-/** 结束本局并取消后台补题（答完已有题即通关，不再干等补题）。 */
+/** 结束本局并取消后台补题。 */
 function endRunAndCancelBackfill(reason = null) {
   backfillToken += 1;
+  openingToken += 1;
   session.backfilling = false;
+  session.openingBusy = false;
+  session.backfillStarted = false;
   session.phase = 'ended';
   session.endReason = reason;
+  lateOpeningBuffer = [];
 }
 
 function isActive() {
@@ -115,11 +135,15 @@ function isPlaying() {
 
 function resetSession() {
   backfillToken += 1;
+  openingToken += 1;
+  lateOpeningBuffer = [];
   session = blankSession();
 }
 
 function startAwaitingScope() {
   backfillToken += 1;
+  openingToken += 1;
+  lateOpeningBuffer = [];
   session = {
     ...blankSession(),
     phase: 'awaiting_scope',
@@ -151,29 +175,123 @@ function normalizeName(s) {
     .replace(/文件夹$/g, '');
 }
 
-function scoreName(query, name) {
-  const q = normalizeName(query);
-  const n = normalizeName(name);
+/** 常见课程简称 → 全称，用来对口语考点 */
+const COURSE_ALIASES = [
+  ['线代', '线性代数'],
+  ['高数', '高等数学'],
+  ['数分', '数学分析'],
+  ['概统', '概率统计', '概率论', '数理统计'],
+  ['计网', '计算机网络'],
+  ['计组', '计算机组成', '组成原理'],
+  ['操统', '操作系统'],
+  ['离散', '离散数学'],
+  ['数电', '数字电路'],
+  ['模电', '模拟电路'],
+  ['编译', '编译原理'],
+  ['计科', '计算机'],
+];
+
+function expandAliases(s) {
+  const n = normalizeName(s);
+  const out = new Set([n]);
+  if (!n || n.length < 2) return [...out];
+  for (const group of COURSE_ALIASES) {
+    const norms = group.map(normalizeName);
+    if (norms.includes(n)) {
+      for (const x of norms) out.add(x);
+    }
+  }
+  return [...out];
+}
+
+function bigramSet(s) {
+  const str = String(s || '');
+  const set = new Set();
+  if (str.length <= 1) {
+    if (str) set.add(str);
+    return set;
+  }
+  for (let i = 0; i < str.length - 1; i += 1) {
+    set.add(str.slice(i, i + 2));
+  }
+  return set;
+}
+
+function jaccardBigrams(a, b) {
+  const A = bigramSet(a);
+  const B = bigramSet(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const x of A) {
+    if (B.has(x)) inter += 1;
+  }
+  return inter / (A.size + B.size - inter);
+}
+
+/** q 是否为 n 的顺序子序列；返回匹配跨度，否则 Infinity */
+function orderedSpan(q, n) {
+  let i = 0;
+  let start = -1;
+  for (let j = 0; j < n.length; j += 1) {
+    if (n[j] !== q[i]) continue;
+    if (start < 0) start = j;
+    i += 1;
+    if (i >= q.length) return j - start + 1;
+  }
+  return Infinity;
+}
+
+function scoreNamePair(q, n) {
   if (!q || !n) return 0;
   if (q === n) return 100;
+
   if (n.includes(q) || q.includes(n)) {
     const shorter = Math.min(q.length, n.length);
     const longer = Math.max(q.length, n.length);
-    if (shorter <= 4 && longer - shorter >= 1 && q !== n) {
-      if (longer <= shorter + 2) return 70;
-      return 0;
+    if (shorter <= 1) return 0;
+    const ratio = shorter / longer;
+    return Math.round(55 + 45 * ratio);
+  }
+
+  if (q.length >= 2 && q.length <= 4) {
+    const span = orderedSpan(q, n);
+    if (Number.isFinite(span) && span <= q.length * 3) {
+      if (q.length === 2 && q[0] !== n[0]) return 0;
+      const compactness = q.length / span;
+      return Math.round(48 + compactness * 28);
     }
-    return 80;
   }
-  if (q.length <= 6 || n.length <= 6) return 0;
-  let hit = 0;
-  const chars = Array.from(q);
-  for (const ch of chars) {
-    if (n.includes(ch)) hit += 1;
+
+  if (q.length >= 3 && n.length >= 3) {
+    const jac = jaccardBigrams(q, n);
+    if (jac >= 0.4) return Math.round(40 + jac * 50);
   }
-  if (!chars.length) return 0;
-  const ratio = hit / chars.length;
-  return ratio >= 0.85 ? Math.round(50 + ratio * 20) : 0;
+  return 0;
+}
+
+function scoreName(query, name) {
+  const q0 = normalizeName(query);
+  const n0 = normalizeName(name);
+  if (!q0 || !n0) return 0;
+  let best = scoreNamePair(q0, n0);
+  const qExp = expandAliases(query);
+  const nExp = expandAliases(name);
+  for (const q of qExp) {
+    for (const n of nExp) {
+      if (q === q0 && n === n0) continue;
+      const s = scoreNamePair(q, n);
+      if (s > 0) best = Math.max(best, s - 4);
+    }
+  }
+  return best;
+}
+
+function lastCourseContext() {
+  try {
+    return require('../course-actions').getLastCourseContext() || {};
+  } catch {
+    return {};
+  }
 }
 
 function noteMeta(bvid) {
@@ -298,10 +416,69 @@ function tryPickPendingChoice(question) {
 }
 
 function looksLikeCurrent(q) {
-  return (
-    /^(当前|这个|正在看的?)?(视频|的)?$/.test(q) ||
-    /当前(视频|这个)?|这个视频|正在看|本集|这集|^current$/i.test(q)
+  const s = String(q || '').trim();
+  if (!s) return false;
+  return /^(当前(这个)?(视频)?|这个视频|正在看的?(视频)?|本集|这集|current)$/i.test(
+    s
   );
+}
+
+const SCOPE_JUNK_RE =
+  /^(吧|呢|啊|呀|嘛|啦|哦|哈|嗯|呗|相关|一下|一个|这个|那个|考点|题目)$/;
+
+function isScopeJunk(s) {
+  const t = String(s || '').trim();
+  return !t || t.length <= 1 || SCOPE_JUNK_RE.test(t);
+}
+
+/** 去掉「考一下 / 帮我复习」等外壳，抽出真正想考的词 */
+function cleanTopicQuery(q) {
+  let s = String(q || '').trim();
+  s = s
+    .replace(/^\/game\b/i, '')
+    .replace(
+      /^(请|帮我|我想|我想要|给我|来|那就|那就考|那就测|给我|麻烦)?(一下|一考|一测)?/u,
+      ''
+    )
+    .replace(
+      /^(考考我|考我|自测|出几道题|出题|做题|答题)/u,
+      ''
+    )
+    .replace(
+      /^(考|测|测验|测试|练习|复习|回顾)(个|一下|下|一考|一测|一复习)?/u,
+      ''
+    )
+    .replace(
+      /(考一下|测验一下|测试一下|出题|做题|答题|练习|复习一下|自测)/gu,
+      ' '
+    )
+    .replace(/^(关于|有关)/u, '')
+    .replace(
+      /(相关的?(知识点|内容|笔记|部分)?|方面的?|的笔记|知识点)/gu,
+      ' '
+    )
+    .replace(/(这块|那块|这一块|那一块|这部分|那部分)$/u, '')
+    .replace(/(吧|呢|啊|呀|嘛|啦|哦|呗)$/u, '')
+    .replace(/[，。！？、,.!?;；：:\s]+/g, ' ')
+    .trim();
+  if (isScopeJunk(s)) return '';
+  return s;
+}
+
+/** 「高数的积分」「机器学习里的反向传播」 */
+function splitPossessive(q) {
+  const s = String(q || '').trim();
+  if (!s) return null;
+  const m = s.match(
+    /^(.+?)(?:课程组)?(?:的|里的|中的|里面的|里|中|\/|／)\s*(.+?)(?:文件夹)?$/
+  );
+  if (!m) return null;
+  const left = cleanTopicQuery(m[1]) || m[1].trim();
+  const right = cleanTopicQuery(m[2]) || m[2].trim();
+  if (isScopeJunk(left) || isScopeJunk(right)) return null;
+  if (left.length < 2 || right.length < 2) return null;
+  if (looksLikeCurrent(left) || looksLikeCurrent(s)) return null;
+  return { left, right };
 }
 
 function resolveCurrent(videoMeta = {}) {
@@ -348,7 +525,10 @@ function resolveBvidMention(q) {
 
 function scoredGroups(query) {
   return listCourseGroups()
-    .map((g) => ({ group: g, score: scoreName(query, g.title) }))
+    .map((g) => ({
+      group: g,
+      score: Math.max(scoreName(query, g.title), scoreName(query, g.topic)),
+    }))
     .filter((x) => x.score >= 50)
     .sort((a, b) => b.score - a.score);
 }
@@ -358,7 +538,6 @@ function parseGroupFolderHints(q) {
   let groupHint = '';
   let folderHint = '';
 
-  // 只认明确的课程组/文件夹结构，避免「相关的吧」被拆成文件夹「吧」
   const groupThenFolder = raw.match(
     /^(.+?)课程组(?:的|里的|中的|\/|／)\s*(.+?)(?:文件夹)?$/
   );
@@ -385,14 +564,8 @@ function parseGroupFolderHints(q) {
     groupHint = raw.replace(/课程组/g, '').replace(/文件夹/g, '').trim();
   }
 
-  // 语气词 / 过短片段不能当文件夹名
-  const junk = /^(吧|呢|啊|呀|嘛|啦|哦|哈|嗯|相关|一下|一个|这个|那个)$/;
-  if (folderHint && (junk.test(folderHint) || folderHint.length <= 1)) {
-    folderHint = '';
-  }
-  if (groupHint && (junk.test(groupHint) || groupHint.length <= 1)) {
-    groupHint = '';
-  }
+  if (folderHint && isScopeJunk(folderHint)) folderHint = '';
+  if (groupHint && isScopeJunk(groupHint)) groupHint = '';
 
   return { groupHint, folderHint, raw };
 }
@@ -417,6 +590,246 @@ function scopeFromGroup(group, folder = null) {
     groupId: detail.id || group.id,
     folderId,
   });
+}
+
+function collectCatalogCandidates(query) {
+  const q = String(query || '').trim();
+  if (!q || isScopeJunk(q)) return [];
+  const out = [];
+  for (const g of listCourseGroups()) {
+    const detail = getCourseGroup(g.id) || g;
+    const groupScore = Math.max(
+      scoreName(q, detail.title || g.title),
+      scoreName(q, detail.topic || g.topic)
+    );
+    if (groupScore >= 50) {
+      const scope = scopeFromGroup(detail);
+      out.push({
+        kind: 'group',
+        score: groupScore,
+        label: `课程组「${detail.title || g.title}」（${scope.notes.length} 篇笔记）`,
+        scope,
+      });
+    }
+    for (const folder of detail.folders || []) {
+      const fs = scoreName(q, folder.title);
+      if (fs < 50) continue;
+      const scope = scopeFromGroup(detail, folder);
+      out.push({
+        kind: 'folder',
+        score: fs + (groupScore >= 50 ? 6 : 0),
+        label: `${detail.title} / ${folder.title}（${scope.notes.length} 篇笔记）`,
+        scope,
+      });
+    }
+    for (const item of detail.items || []) {
+      const is = scoreName(q, item.title);
+      if (is < 72) continue;
+      const meta = noteMeta(item.bvid);
+      if (!meta?.hasBody) continue;
+      const scope = buildScope({
+        type: 'bvid',
+        label: `笔记「${meta.title}」`,
+        bvids: [meta.bvid],
+        groupId: detail.id || g.id,
+        query: q,
+      });
+      out.push({
+        kind: 'item',
+        score: is,
+        label: `笔记「${meta.title}」`,
+        scope,
+      });
+    }
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+function pickCatalogMatch(candidates, { intro } = {}) {
+  const list = (candidates || []).filter((c) => c && c.score >= 55 && c.scope);
+  if (!list.length) return null;
+  const best = list[0];
+  const second = list[1];
+  const uniqueStrong =
+    best.score >= 75 && (!second || best.score - second.score >= 12);
+
+  const applyOrEmpty = (item) => {
+    if (!item.scope.notes?.length) {
+      return {
+        handled: true,
+        ok: false,
+        game: true,
+        message: `「${item.label}」里没有可用笔记正文，换个范围或先记笔记。`,
+      };
+    }
+    return applyScope(item.scope);
+  };
+
+  if (uniqueStrong) return applyOrEmpty(best);
+  if (list.length === 1) {
+    if (best.score >= 70) return applyOrEmpty(best);
+    return null;
+  }
+  return offerChoices(
+    list.slice(0, 5).map(({ label, scope }) => ({ label, scope })),
+    intro || '找到多个接近的范围，选一个：'
+  );
+}
+
+function notesMatchingQuery(query, { bvids = null, limit = MAX_TOPIC_NOTES } = {}) {
+  const q = String(query || '').trim();
+  if (!q || isScopeJunk(q)) return [];
+  const restrict =
+    Array.isArray(bvids) && bvids.length
+      ? new Set(
+          bvids
+            .map((b) => normalizeBvid(b) || String(b || '').trim())
+            .filter(Boolean)
+        )
+      : null;
+
+  const picked = [];
+  const seen = new Set();
+  const consider = (bvid, title) => {
+    const key = normalizeBvid(bvid) || String(bvid || '').trim();
+    if (!key || seen.has(key)) return;
+    if (restrict && !restrict.has(key)) return;
+    const meta = noteMeta(key);
+    if (!meta?.hasBody) return;
+    seen.add(key);
+    picked.push({
+      bvid: key,
+      title: String(title || meta.title || '').trim() || key,
+    });
+  };
+
+  const { notes, hits } = searchNotes(q, { limit: 30 });
+  for (const n of notes || []) consider(n.bvid, n.title);
+  for (const h of hits || []) consider(h.bvid, '');
+
+  if (restrict && picked.length < limit) {
+    try {
+      const chunkHits = searchNoteChunks(q, {
+        bvids: [...restrict],
+        limit: 20,
+      });
+      for (const h of chunkHits || []) consider(h.bvid, '');
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return picked.slice(0, limit);
+}
+
+function applyTopicNotes(query, notes, { label, groupId = null } = {}) {
+  const picked = Array.isArray(notes) ? notes : [];
+  if (!picked.length) {
+    return {
+      handled: true,
+      ok: false,
+      game: true,
+      message: `主题「${query}」没有检索到相关笔记。换个词，或指定课程组/当前视频。`,
+    };
+  }
+  return applyScope({
+    type: 'topic',
+    label: label || `主题「${query}」`,
+    bvids: picked.map((n) => n.bvid),
+    notes: picked,
+    groupId,
+    query,
+  });
+}
+
+function resolveTopicInGroup(group, innerQuery) {
+  const detail = getCourseGroup(group.id) || group;
+  const folder = findFolderInGroup(detail, innerQuery);
+  if (folder) return applyScope(scopeFromGroup(detail, folder));
+
+  const itemHits = (detail.items || [])
+    .map((it) => ({ it, score: scoreName(innerQuery, it.title) }))
+    .filter((x) => x.score >= 55)
+    .sort((a, b) => b.score - a.score);
+
+  if (itemHits.length === 1 && itemHits[0].score >= 72) {
+    const meta = noteMeta(itemHits[0].it.bvid);
+    if (meta?.hasBody) {
+      return applyScope(
+        buildScope({
+          type: 'bvid',
+          label: `${detail.title} · 「${meta.title}」`,
+          bvids: [meta.bvid],
+          groupId: detail.id,
+          query: innerQuery,
+        })
+      );
+    }
+  }
+
+  const groupBvids = (detail.items || []).map((it) => it.bvid);
+  const picked = notesMatchingQuery(innerQuery, { bvids: groupBvids });
+  if (picked.length) {
+    return applyTopicNotes(innerQuery, picked, {
+      label: `${detail.title} · ${innerQuery}`,
+      groupId: detail.id,
+    });
+  }
+
+  if (itemHits.length) {
+    const bvids = itemHits
+      .map((x) => x.it.bvid)
+      .filter((bv) => noteMeta(bv)?.hasBody);
+    if (bvids.length) {
+      return applyScope(
+        buildScope({
+          type: 'topic',
+          label: `${detail.title} · ${innerQuery}`,
+          bvids,
+          groupId: detail.id,
+          query: innerQuery,
+        })
+      );
+    }
+  }
+
+  return {
+    handled: true,
+    ok: false,
+    game: true,
+    message: `在「${detail.title}」里没找到「${innerQuery}」相关笔记。可以说文件夹名，或换个词。`,
+  };
+}
+
+function resolvePossessive(q) {
+  const split = splitPossessive(q);
+  if (!split) return null;
+  const groupHits = scoredGroups(split.left);
+  if (!groupHits.length) return null;
+  const best = groupHits[0];
+  const second = groupHits[1];
+  if (second && best.score - second.score < 12 && best.score < 80) {
+    return null;
+  }
+  if (best.score < 55) return null;
+  return resolveTopicInGroup(best.group, split.right);
+}
+
+function resolveRecentContext(q) {
+  const s = String(q || '').trim();
+  if (!/^(这个|刚才?(那个)?|上次的?|刚刚的?)(课程组|课)?$/.test(s)) return null;
+  const ctx = lastCourseContext();
+  if (ctx.groupId) {
+    const group = getCourseGroup(ctx.groupId);
+    if (group) {
+      const folder =
+        ctx.folderId &&
+        (group.folders || []).find((f) => String(f.id) === String(ctx.folderId));
+      return applyScope(scopeFromGroup(group, folder || null));
+    }
+  }
+  return null;
 }
 
 function resolveCourseScope(q) {
@@ -498,8 +911,8 @@ function resolveCourseScope(q) {
   return null;
 }
 
-function resolveTopic(q) {
-  const query = cleanTopicQuery(q) || String(q || '').trim();
+function resolveTopic(q, { bvids = null, label = '' } = {}) {
+  const query = cleanTopicQuery(q);
   if (!query) {
     return {
       handled: true,
@@ -509,67 +922,13 @@ function resolveTopic(q) {
     };
   }
 
-  const { notes } = searchNotes(query, { limit: 20 });
-  const picked = (notes || [])
-    .filter((n) => noteMeta(n.bvid)?.hasBody)
-    .slice(0, MAX_TOPIC_NOTES)
-    .map((n) => ({
-      bvid: n.bvid,
-      title: String(n.title || '').trim() || n.bvid,
-    }));
-
-  if (!picked.length) {
-    return {
-      handled: true,
-      ok: false,
-      game: true,
-      message: `主题「${query}」没有检索到相关笔记。换个词，或指定课程组/当前视频。`,
-    };
-  }
-
-  return applyScope({
-    type: 'topic',
-    label: `主题「${query}」`,
-    bvids: picked.map((n) => n.bvid),
-    notes: picked,
-    query,
-  });
-}
-
-function cleanTopicQuery(q) {
-  let s = String(q || '').trim();
-  s = s
-    .replace(/^\/game\b/i, '')
-    .replace(
-      /^(请|帮我|我想|我想要|给我|来|那就|那就考|那就测)?(一下|一考|一测)?/u,
-      ''
-    )
-    .replace(/^(考|测|测验|测试|练习|复习)(个|一下|下|一考|一测)?/u, '')
-    .replace(
-      /(考一下|测验一下|测试一下|出题|做题|答题|练习|复习一下)/gu,
-      ' '
-    )
-    .replace(
-      /(相关的?(知识点|内容|笔记|部分)?|方面的?|的笔记|笔记|知识点|内容|主题|课程)/gu,
-      ' '
-    )
-    .replace(/(吧|呢|啊|呀|嘛|啦|哦|呗)$/u, '')
-    .replace(/[，。！？、,.!?;；：:\s]+/g, ' ')
-    .trim();
-  return s;
-}
-
-function looksLikeTopicUtterance(q) {
-  const s = String(q || '').trim();
-  if (!s) return false;
-  if (/课程组|文件夹|BV[\w]+/i.test(s)) return false;
-  return /(考|测|练习|复习|相关|关于|知识点|主题)/.test(s);
+  const picked = notesMatchingQuery(query, { bvids });
+  return applyTopicNotes(query, picked, { label });
 }
 
 function formatGameCatalog() {
   const groups = listCourseGroups();
   if (!groups.length) return '（当前没有任何课程组）';
-  // 只送前 24 个组，文件夹名截断，减轻 game_scope 输入
   return groups
     .slice(0, 24)
     .map((g, i) => {
@@ -577,11 +936,13 @@ function formatGameCatalog() {
       const folders = (detail?.folders || [])
         .map((f) => f.title)
         .filter(Boolean)
-        .slice(0, 8);
+        .slice(0, 12);
       const folderPart = folders.length
         ? `；夹：${folders.join('、')}`
         : '';
-      return `${i + 1}.「${g.title}」${g.topic ? `(${String(g.topic).slice(0, 24)})` : ''}·${g.itemCount || 0}v${folderPart}`;
+      const topic = String(g.topic || '').trim();
+      const topicPart = topic ? `(${topic.slice(0, 28)})` : '';
+      return `${i + 1}.「${g.title}」${topicPart}·${g.itemCount || 0}v${folderPart}`;
     })
     .join('\n');
 }
@@ -688,22 +1049,29 @@ function applyLlmScopeIntent(intent, videoMeta = {}) {
     if (kind === 'folder' || folderTitle) {
       const folder = folderTitle ? findFolderInGroup(group, folderTitle) : null;
       if (!folder && folderTitle) {
-        return {
-          handled: true,
-          ok: false,
-          game: true,
-          message: `在「${group.title}」里没找到文件夹「${folderTitle}」。换个名字或改说主题。`,
-        };
+        const inner =
+          cleanTopicQuery(intent.topic || folderTitle) || folderTitle;
+        return resolveTopicInGroup(group, inner);
       }
       if (folder) return applyScope(scopeFromGroup(group, folder));
     }
+
+    const innerTopic = cleanTopicQuery(intent.topic || '');
+    if (innerTopic) return resolveTopicInGroup(group, innerTopic);
 
     return applyScope(scopeFromGroup(group));
   }
 
   if (kind === 'topic') {
-    const topic = cleanTopicQuery(intent.topic || '') || String(intent.topic || '').trim();
-    if (!topic) return null;
+    const topic =
+      cleanTopicQuery(intent.topic || '') ||
+      String(intent.topic || '').trim();
+    if (!topic || isScopeJunk(topic)) return null;
+    const groupTitle = String(intent.groupTitle || '').trim();
+    if (groupTitle) {
+      const group = findGroupByTitle(groupTitle);
+      if (group) return resolveTopicInGroup(group, topic);
+    }
     return resolveTopic(topic);
   }
 
@@ -714,12 +1082,12 @@ async function parseScopeWithLlm(question, videoMeta = {}) {
   const groups = listCourseGroups().slice(0, 24);
   const payload = {
     userMessage: String(question || '').trim().slice(0, 240),
+    cleanedMessage: cleanTopicQuery(question).slice(0, 120),
     currentVideo: {
       bvid: videoMeta.bvid || null,
       title: videoMeta.title ? String(videoMeta.title).slice(0, 80) : null,
     },
     catalogText: formatGameCatalog(),
-    // 精简字段，避免与 catalogText 重复膨胀
     existingCourseGroups: groups.map((g) => ({
       title: g.title,
       topic: g.topic ? String(g.topic).slice(0, 32) : '',
@@ -729,10 +1097,13 @@ async function parseScopeWithLlm(question, videoMeta = {}) {
 
   try {
     const raw = await completeTask('game_scope', payload, {
-      max_tokens: 220,
+      max_tokens: 800,
       timeoutMs: GAME_SCOPE_TIMEOUT_MS,
-      jsonMode: true,
+      // V4 + json_object + 小额度：非流式常返回空 content
+      jsonMode: false,
       temperature: 0.2,
+      thinking: false,
+      reasoningEffort: 'none',
     });
     return parseJsonObject(raw);
   } catch (err) {
@@ -745,8 +1116,8 @@ async function resolveScope(question, videoMeta = {}) {
   const pending = tryPickPendingChoice(question);
   if (pending) return pending;
 
-  const q = String(question || '').trim();
-  if (!q) {
+  const raw = String(question || '').trim();
+  if (!raw) {
     return {
       handled: true,
       ok: false,
@@ -755,17 +1126,31 @@ async function resolveScope(question, videoMeta = {}) {
     };
   }
 
-  if (looksLikeCurrent(q)) {
+  const cleaned = cleanTopicQuery(raw);
+  const q = cleaned || raw;
+
+  if (looksLikeCurrent(raw) || looksLikeCurrent(q)) {
     return resolveCurrent(videoMeta);
   }
 
-  const byBvid = resolveBvidMention(q);
+  const recent = resolveRecentContext(q) || resolveRecentContext(raw);
+  if (recent) return recent;
+
+  const byBvid = resolveBvidMention(raw);
   if (byBvid) return byBvid;
 
-  const explicitCourse = /课程组|文件夹/.test(q);
+  const explicitCourse = /课程组|文件夹/.test(raw);
 
-  // 启发式课程组/文件夹优先（零 LLM）
-  const course = resolveCourseScope(q);
+  const possessive = resolvePossessive(q) || resolvePossessive(raw);
+  if (possessive) return possessive;
+
+  // 目录：课程组 / 文件夹 / 课时名（先用清洗后的词，再用原句）
+  let catalog = collectCatalogCandidates(q);
+  if (!catalog.length && raw !== q) catalog = collectCatalogCandidates(raw);
+  const catalogHit = pickCatalogMatch(catalog);
+  if (catalogHit) return catalogHit;
+
+  const course = resolveCourseScope(q) || resolveCourseScope(raw);
   if (
     course &&
     (course.scopeReady ||
@@ -776,30 +1161,25 @@ async function resolveScope(question, videoMeta = {}) {
     return course;
   }
 
-  // 口语主题：先本地检索，命中则跳过 game_scope
-  if (!explicitCourse && looksLikeTopicUtterance(q)) {
-    const topicHit = resolveTopic(q);
-    if (topicHit?.scopeReady) return topicHit;
-    const intent = await parseScopeWithLlm(q, videoMeta);
-    const fromLlm = intent ? applyLlmScopeIntent(intent, videoMeta) : null;
-    if (fromLlm) return fromLlm;
-    return topicHit;
-  }
-
-  // 清洗后的关键词能搜到笔记 → 仍不调用 scope LLM
-  const cleaned = cleanTopicQuery(q);
+  // 本地主题检索：有命中也先走，但清洗后太泛的词不要搜
   if (cleaned && cleaned.length >= 2 && !explicitCourse) {
     const topicHit = resolveTopic(cleaned);
     if (topicHit?.scopeReady) return topicHit;
+    const split = splitPossessive(cleaned) || splitPossessive(raw);
+    if (split?.right && split.right !== cleaned) {
+      const innerHit = resolveTopic(split.right);
+      if (innerHit?.scopeReady) return innerHit;
+    }
   }
 
-  const intent = await parseScopeWithLlm(q, videoMeta);
+  const intent = await parseScopeWithLlm(raw, videoMeta);
   const fromLlm = intent ? applyLlmScopeIntent(intent, videoMeta) : null;
   if (fromLlm) return fromLlm;
 
   if (course && course.scopeReady) return course;
 
-  return resolveTopic(q);
+  if (cleaned && cleaned.length >= 2) return resolveTopic(cleaned);
+  return resolveTopic(raw);
 }
 
 /** 从 bodyMd 里抠出指定二级标题段落（要点 / 总结） */
@@ -814,7 +1194,17 @@ function extractMdSection(bodyMd, heading) {
   return (next >= 0 ? rest.slice(0, next) : rest).trim();
 }
 
-function noteQuizExcerpt(doc) {
+function noteQuizExcerpt(doc, topicQuery = '') {
+  const topic = normalizeName(topicQuery);
+  const preferTopic = (text) => {
+    const raw = String(text || '').trim();
+    if (!raw || !topic || topic.length < 2) return raw;
+    const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lines.length <= 1) return raw;
+    const focused = lines.filter((l) => normalizeName(l).includes(topic));
+    return focused.length ? focused.join('\n') : raw;
+  };
+
   const structured = doc?.notes;
   if (
     structured &&
@@ -836,7 +1226,7 @@ function noteQuizExcerpt(doc) {
         if (t) lines.push(`- ${t}`);
       }
     }
-    return lines.join('\n').trim();
+    return preferTopic(lines.join('\n').trim());
   }
 
   const body = String(doc?.bodyMd || '')
@@ -847,7 +1237,45 @@ function noteQuizExcerpt(doc) {
   const points = extractMdSection(body, '要点');
   const summary = extractMdSection(body, '总结');
   const dense = [points, summary && `总结：\n${summary}`].filter(Boolean).join('\n\n');
-  return (dense || body).trim();
+  return preferTopic((dense || body).trim());
+}
+
+function buildTopicChunkCorpus(scope, charLimit) {
+  const query = String(scope?.query || '').trim();
+  const bvids = (scope?.notes || [])
+    .map((n) => normalizeBvid(n.bvid) || String(n.bvid || '').trim())
+    .filter(Boolean);
+  if (!query || query.length < 2 || !bvids.length) return '';
+  let hits = [];
+  try {
+    hits = searchNoteChunks(query, { bvids, limit: 8 });
+  } catch {
+    return '';
+  }
+  const parts = [];
+  let used = 0;
+  const seen = new Set();
+  for (const h of hits || []) {
+    const text = String(h.text || '').trim();
+    if (!text) continue;
+    const key = `${h.bvid}:${h.chunkIndex || 0}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const title = noteMeta(h.bvid)?.title || '';
+    const heading = String(h.heading || '').trim();
+    const block =
+      `[${h.bvid}${title ? ` · ${title}` : ''}${heading ? ` / ${heading}` : ''}]\n` +
+      text.slice(0, CORPUS_PER_NOTE);
+    const room = charLimit - used;
+    if (room < 80) break;
+    if (block.length > room) {
+      parts.push(block.slice(0, room));
+      break;
+    }
+    parts.push(block);
+    used += block.length + 2;
+  }
+  return parts.join('\n\n');
 }
 
 /**
@@ -866,21 +1294,24 @@ function buildCorpus(scope, opts = {}) {
   const notes = Array.isArray(scope?.notes) ? scope.notes.slice() : [];
   if (!notes.length) return '';
 
+  const topicFirst = buildTopicChunkCorpus(scope, charLimit);
+  if (topicFirst && topicFirst.length >= 200) return topicFirst;
+
   const offset =
     notes.length > 0 ? Math.abs(Number(opts.noteOffset) || 0) % notes.length : 0;
   const ordered = offset
     ? notes.slice(offset).concat(notes.slice(0, offset))
     : notes;
 
-  const parts = [];
-  let used = 0;
+  const parts = topicFirst ? [topicFirst] : [];
+  let used = topicFirst.length;
   let taken = 0;
 
   for (const meta of ordered) {
     if (taken >= maxNotes || used >= charLimit) break;
     const doc = loadNoteDoc(meta.bvid);
     if (!doc) continue;
-    const text = noteQuizExcerpt(doc).slice(0, CORPUS_PER_NOTE);
+    const text = noteQuizExcerpt(doc, scope?.query).slice(0, CORPUS_PER_NOTE);
     if (!text) continue;
 
     const title = meta.title || doc.title || '';
@@ -899,6 +1330,124 @@ function buildCorpus(scope, opts = {}) {
   }
 
   return parts.join('\n\n');
+}
+
+function shuffleInPlace(list) {
+  const arr = Array.isArray(list) ? list : [];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+function scopeBvidList(scope = session.scope) {
+  const fromNotes = (scope?.notes || [])
+    .map((n) => normalizeBvid(n.bvid) || String(n.bvid || '').trim())
+    .filter(Boolean);
+  const fromScope = Array.isArray(scope?.bvids)
+    ? scope.bvids.map((b) => normalizeBvid(b) || String(b || '').trim())
+    : [];
+  return [...new Set([...fromNotes, ...fromScope].filter(Boolean))];
+}
+
+function isQuizableChunk(row) {
+  const text = String(row?.text || '')
+    .replace(/[#*`>_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length < MIN_QUIZ_CHUNK_CHARS) return false;
+  const heading = String(row?.heading || '').trim();
+  if (heading && QUIZ_JUNK_HEADING_RE.test(heading)) return false;
+  return true;
+}
+
+function formatChunkExcerpt(row) {
+  const title = noteMeta(row.bvid)?.title || '';
+  const heading = String(row.heading || '').trim();
+  const text = String(row.text || '').trim().slice(0, QUIZ_CHUNK_EXCERPT_LIMIT);
+  return `[${row.bvid}${title ? ` · ${title}` : ''}${heading ? ` / ${heading}` : ''}]\n${text}`;
+}
+
+function pickDiverseChunks(chunks, n) {
+  const need = Math.max(0, Number(n) || 0);
+  const byBvid = new Map();
+  for (const c of chunks || []) {
+    const k = String(c.bvid || '');
+    if (!byBvid.has(k)) byBvid.set(k, []);
+    byBvid.get(k).push(c);
+  }
+  const keys = [...byBvid.keys()];
+  const out = [];
+  const seen = new Set();
+  while (out.length < need) {
+    let added = false;
+    for (const k of keys) {
+      const q = byBvid.get(k);
+      while (q && q.length) {
+        const c = q.shift();
+        const id = `${c.bvid}:${c.chunkIndex}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(c);
+        added = true;
+        break;
+      }
+      if (out.length >= need) break;
+    }
+    if (!added) break;
+  }
+  return out;
+}
+
+function takeQuizChunks(pool, n) {
+  const picked = pickDiverseChunks(pool, n);
+  if (!picked.length) return [];
+  const ids = new Set(picked.map((c) => `${c.bvid}:${c.chunkIndex}`));
+  for (let i = (pool || []).length - 1; i >= 0; i -= 1) {
+    const c = pool[i];
+    if (ids.has(`${c.bvid}:${c.chunkIndex}`)) pool.splice(i, 1);
+  }
+  return picked;
+}
+
+function collectQuizChunks(scope) {
+  const bvids = scopeBvidList(scope);
+  if (!bvids.length) return [];
+  const query = String(scope?.query || '').trim();
+  let hits = [];
+  if (query.length >= 2) {
+    try {
+      hits = searchNoteChunks(query, { bvids, limit: 24 }) || [];
+    } catch {
+      hits = [];
+    }
+  }
+  let extra = [];
+  try {
+    extra = listChunksForBvids(bvids, { limit: 80, perBvid: 8 }) || [];
+  } catch {
+    extra = [];
+  }
+
+  const seen = new Set();
+  const take = (rows) => {
+    const out = [];
+    for (const row of rows || []) {
+      if (!isQuizableChunk(row)) continue;
+      const id = `${row.bvid}:${row.chunkIndex}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(row);
+    }
+    return out;
+  };
+
+  const usableHits = shuffleInPlace(take(hits));
+  const usableExtra = shuffleInPlace(take(extra));
+  return usableHits.concat(usableExtra);
 }
 
 function parseJsonObject(text) {
@@ -945,19 +1494,33 @@ function normalizeQuestions(rawList) {
   return out;
 }
 
+function stillExpectingMoreQuestions() {
+  return (
+    session.lives > 0 &&
+    session.questions.length < MAX_QUESTIONS &&
+    (session.backfilling || session.openingBusy)
+  );
+}
+
 function publicGameUi(extra = {}) {
   const ready = session.questions.length;
-  const total = session.backfilling
-    ? Math.max(ready, session.targetTotal || MAX_QUESTIONS)
-    : ready;
   const q = session.questions[session.index];
+  const waitingMore =
+    Boolean(extra.waitingMore) ||
+    (session.phase === 'asking' && !q && stillExpectingMoreQuestions());
+  const displayTotal = Math.min(
+    MAX_QUESTIONS,
+    session.backfilling || session.openingBusy
+      ? Math.max(ready, EARLY_READY)
+      : ready
+  );
   const base = {
     mode: session.phase,
     lives: session.lives,
     index: session.index,
-    total,
+    total: displayTotal,
     readyCount: ready,
-    backfilling: Boolean(session.backfilling),
+    backfilling: Boolean(session.backfilling || session.openingBusy),
     correctCount: session.correctCount,
     scopeLabel: session.scope?.label || '',
     ...extra,
@@ -986,8 +1549,21 @@ function publicGameUi(extra = {}) {
     };
   }
 
+  if (session.phase === 'asking' && waitingMore) {
+    return {
+      ...base,
+      q: '下一题正在出…',
+      choices: ['…', '…', '…', '…'],
+      disabled: true,
+      waitingMore: true,
+    };
+  }
+
   if (session.phase === 'asking' && q) {
-    const totalLabel = session.backfilling ? `${total}+` : String(total);
+    const totalLabel =
+      (session.backfilling || session.openingBusy) && ready < MAX_QUESTIONS
+        ? `${ready}+`
+        : String(ready);
     return {
       ...base,
       q: `第 ${session.index + 1}/${totalLabel} 题 · 命×${session.lives}\n${q.q}`,
@@ -1004,27 +1580,26 @@ function publicGameUi(extra = {}) {
   };
 }
 
-async function requestQuestions({ maxQuestions, corpus, existing = [] }) {
+async function requestQuestions({
+  maxQuestions,
+  corpus,
+  existing = [],
+  attempts,
+  signal,
+} = {}) {
   const n = Math.max(1, Math.min(Number(maxQuestions) || 1, MAX_QUESTIONS));
-  // 短选项 JSON：3 题约千 token 足够，过高只拖长生成
-  const maxTokens = n <= 1 ? 480 : n <= 2 ? 780 : 1100;
-  let excerpts = corpus;
-  if (session.scope) {
-    if (n <= 1) {
-      excerpts =
-        buildCorpus(session.scope, {
-          charLimit: CORPUS_SLIM_LIMIT,
-          maxNotes: 2,
-          noteOffset: session.questions.length,
-        }) || corpus;
-    } else if (n >= EARLY_READY) {
-      excerpts =
-        buildCorpus(session.scope, {
-          charLimit: CORPUS_FIRST_PACK_LIMIT,
-          maxNotes: CORPUS_MAX_NOTES,
-        }) || corpus;
-    }
+  const maxTokens = n <= 1 ? 2048 : n <= 2 ? 1400 : 1800;
+  const timeoutMs = n <= 1 ? GAME_QUIZ_ONE_TIMEOUT_MS : GAME_QUIZ_TIMEOUT_MS;
+  const maxAttempts = Math.max(1, Number(attempts) || (n <= 1 ? 1 : 2));
+  let excerpts = String(corpus || '').trim();
+  if (!excerpts && session.scope) {
+    excerpts = buildCorpus(session.scope, {
+      charLimit: n <= 1 ? CORPUS_SLIM_LIMIT : CORPUS_FIRST_PACK_LIMIT,
+      maxNotes: n <= 1 ? 2 : CORPUS_MAX_NOTES,
+      noteOffset: session.questions.length,
+    });
   }
+  if (!excerpts) throw new Error('没有可出题的笔记片段');
 
   const existingQuestions = existing
     .map((item) => item.q)
@@ -1032,21 +1607,27 @@ async function requestQuestions({ maxQuestions, corpus, existing = [] }) {
     .slice(0, 8);
 
   let lastErr = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal?.aborted) throw new Error('LLM 请求已取消');
     try {
       const raw = await completeTask(
         'game_quiz',
         {
           maxQuestions: n,
           scope: session.scope?.label || '',
+          topicFocus: String(session.scope?.query || '').trim().slice(0, 40),
           excerpts,
           existingQuestions,
         },
         {
           max_tokens: maxTokens,
-          timeoutMs: GAME_QUIZ_TIMEOUT_MS,
-          jsonMode: true,
+          timeoutMs,
+          // V4 非流式 json_object 在关思考/小额度时经常 content 为空；提示词已要求 JSON
+          jsonMode: false,
           temperature: 0.3,
+          thinking: false,
+          reasoningEffort: 'none',
+          signal,
         }
       );
       const parsed = parseJsonObject(raw);
@@ -1055,12 +1636,132 @@ async function requestQuestions({ maxQuestions, corpus, existing = [] }) {
       lastErr = new Error('模型返回了 JSON 但没有有效题目');
     } catch (err) {
       lastErr = err;
+      if (String(err?.message || '').includes('已取消')) throw err;
     }
-    if (attempt === 0) {
+    if (attempt < maxAttempts - 1) {
       await new Promise((r) => setTimeout(r, 120 + Math.random() * 180));
     }
   }
   throw lastErr || new Error('出题失败');
+}
+
+async function requestOneFromChunk(chunk, existing = [], { signal } = {}) {
+  const t0 = Date.now();
+  try {
+    const list = await requestQuestions({
+      maxQuestions: 1,
+      corpus: formatChunkExcerpt(chunk),
+      existing,
+      attempts: 1,
+      signal,
+    });
+    const q = list[0];
+    if (q && !q.sourceBvid) q.sourceBvid = chunk.bvid;
+    console.log(
+      `[bili-pet] game quiz chunk ok ${Date.now() - t0}ms heading=${String(chunk.heading || '').slice(0, 24)}`
+    );
+    return q ? [q] : [];
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (!msg.includes('已取消')) {
+      console.warn(`[bili-pet] game quiz chunk fail ${Date.now() - t0}ms:`, msg);
+    }
+    throw err;
+  }
+}
+
+async function requestParallelFromChunks(
+  chunks,
+  existing = [],
+  { want = EARLY_READY, abortRest = true, onExtra, onSettled } = {}
+) {
+  const list = Array.isArray(chunks) ? chunks : [];
+  if (!list.length) {
+    try {
+      onSettled?.();
+    } catch (_) {
+      /* ignore */
+    }
+    return [];
+  }
+  const need = Math.max(1, Number(want) || EARLY_READY);
+  const ac = abortRest ? new AbortController() : null;
+  const collected = [];
+  const seenQ = new Set((existing || []).map((q) => q.q).filter(Boolean));
+  const signal = ac?.signal;
+
+  await new Promise((resolve) => {
+    let pending = list.length;
+    let resolved = false;
+    const resolveOnce = () => {
+      if (resolved) return;
+      resolved = true;
+      if (abortRest) ac.abort();
+      resolve();
+    };
+
+    for (const chunk of list) {
+      requestOneFromChunk(chunk, existing, signal ? { signal } : {})
+        .then((qs) => {
+          for (const q of qs || []) {
+            if (!q?.q || seenQ.has(q.q)) continue;
+            seenQ.add(q.q);
+            if (!resolved) {
+              collected.push(q);
+              if (collected.length >= need) resolveOnce();
+            } else if (!abortRest) {
+              onExtra?.(q);
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          pending -= 1;
+          if (pending <= 0) {
+            resolveOnce();
+            try {
+              onSettled?.();
+            } catch (_) {
+              /* ignore */
+            }
+          }
+        });
+    }
+  });
+
+  return collected.slice(0, MAX_QUESTIONS);
+}
+
+async function fillOpeningFromChunks(pool, existing = []) {
+  const have = Array.isArray(existing) ? existing.slice() : [];
+  const need = EARLY_READY - have.length;
+  if (need <= 0) return have;
+  const raceN = Math.max(need, Math.min(OPENING_RACE, (pool || []).length));
+  const chunks = takeQuizChunks(pool, raceN);
+  if (!chunks.length) return have;
+  session.openingBusy = chunks.length > need;
+  const token = ++openingToken;
+  const more = await requestParallelFromChunks(chunks, have, {
+    want: need,
+    abortRest: false,
+    onExtra: (q) => {
+      if (token !== openingToken) return;
+      handleLateQuestion(q);
+    },
+    onSettled: () => {
+      if (token !== openingToken) return;
+      session.openingBusy = false;
+      startBackfillIfNeeded();
+    },
+  });
+  const seen = new Set(have.map((q) => q.q));
+  for (const q of more) {
+    if (!q?.q || seen.has(q.q)) continue;
+    seen.add(q.q);
+    have.push(q);
+    if (have.length >= MAX_QUESTIONS) break;
+  }
+  return have;
 }
 
 function appendUniqueQuestions(list) {
@@ -1076,11 +1777,54 @@ function appendUniqueQuestions(list) {
   return added;
 }
 
+function consumeLateOpening() {
+  const list = lateOpeningBuffer;
+  lateOpeningBuffer = [];
+  return list;
+}
+
+function handleLateQuestion(q) {
+  if (!q?.q) return;
+  if (session.phase === 'asking') {
+    if (appendUniqueQuestions([q]) > 0) {
+      notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
+    }
+    return;
+  }
+  if (session.phase === 'generating') {
+    lateOpeningBuffer.push(q);
+  }
+}
+
+function startBackfillIfNeeded() {
+  if (session.phase !== 'asking') return;
+  if (session.openingBusy) {
+    session.backfilling = true;
+    return;
+  }
+  if (session.questions.length >= MAX_QUESTIONS) {
+    session.backfilling = false;
+    if (session.index >= session.questions.length && session.lives > 0) {
+      endRunAndCancelBackfill(null);
+      notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
+      notifyPet('game_play_end');
+      return;
+    }
+    notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
+    return;
+  }
+  if (session.backfillStarted) return;
+  session.backfillStarted = true;
+  session.backfilling = true;
+  const token = ++backfillToken;
+  void backfillQuestions('', token);
+}
+
 async function backfillQuestions(corpus, token) {
   const finish = () => {
     if (token !== backfillToken) return;
     session.backfilling = false;
-    // 若用户已答完全部已有题（竞态），直接通关，不进入等待
+    // 补题结束且用户已答完当前全部题：这时才通关
     if (
       session.phase === 'asking' &&
       session.index >= session.questions.length &&
@@ -1094,16 +1838,6 @@ async function backfillQuestions(corpus, token) {
     notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
   };
 
-  const scopeBvids = () => {
-    const fromNotes = (session.scope?.notes || [])
-      .map((n) => normalizeBvid(n.bvid) || String(n.bvid || '').trim())
-      .filter(Boolean);
-    const fromScope = Array.isArray(session.scope?.bvids)
-      ? session.scope.bvids.map((b) => normalizeBvid(b) || String(b || '').trim())
-      : [];
-    return [...new Set([...fromNotes, ...fromScope].filter(Boolean))];
-  };
-
   try {
     let idleRounds = 0;
     let failRounds = 0;
@@ -1114,28 +1848,22 @@ async function backfillQuestions(corpus, token) {
       const need = MAX_QUESTIONS - session.questions.length;
       if (need <= 0) break;
 
-      // 优先继续从题库补
-      const fromBank = takeQuizBankQuestions(scopeBvids(), {
-        limit: need,
-        markUsed: true,
-      });
-      if (fromBank.length) {
-        const added = appendUniqueQuestions(fromBank);
-        if (added > 0) {
-          idleRounds = 0;
-          failRounds = 0;
-          notifyPet('game_ui_refresh', { gameUi: publicGameUi() });
-          continue;
-        }
-      }
-
       let more = [];
       try {
-        more = await requestQuestions({
-          maxQuestions: 1,
-          corpus,
-          existing: session.questions.slice(),
-        });
+        const batchN = Math.min(need, 2);
+        const chunks = takeQuizChunks(session.chunkQueue || [], batchN);
+        if (chunks.length) {
+          more = await requestParallelFromChunks(
+            chunks,
+            session.questions.slice(),
+            { want: chunks.length, abortRest: true }
+          );
+        } else {
+          more = await requestQuestions({
+            maxQuestions: 1,
+            existing: session.questions.slice(),
+          });
+        }
       } catch (err) {
         failRounds += 1;
         console.warn('[bili-pet] game backfill slot failed:', err?.message || err);
@@ -1180,143 +1908,78 @@ async function beginQuizFromScope() {
   session.lives = START_LIVES;
   session.correctCount = 0;
   session.backfilling = false;
+  session.backfillStarted = false;
+  session.openingBusy = false;
   session.targetTotal = MAX_QUESTIONS;
+  session.chunkQueue = [];
+  lateOpeningBuffer = [];
+  openingToken += 1;
   notifyPet('game_generating');
 
-  const scopeBvids = [
-    ...new Set(
-      (session.scope.notes || [])
-        .map((n) => normalizeBvid(n.bvid) || String(n.bvid || '').trim())
-        .filter(Boolean)
-        .concat(
-          Array.isArray(session.scope.bvids)
-            ? session.scope.bvids
-                .map((b) => normalizeBvid(b) || String(b || '').trim())
-                .filter(Boolean)
-            : []
-        )
-    ),
-  ];
+  const chunkPool = collectQuizChunks(session.scope);
 
-  // 1) 题库命中：立刻开打，不再干等 LLM
-  const bankFirst = takeQuizBankQuestions(scopeBvids, {
-    limit: MAX_QUESTIONS,
-    markUsed: true,
-  });
-  if (bankFirst.length >= 1) {
-    session.questions = bankFirst.slice(0, MAX_QUESTIONS);
+  const startAsking = (message) => {
     const ready = session.questions.length;
     session.phase = 'asking';
-    session.backfilling = ready < MAX_QUESTIONS;
+    session.backfilling = ready < MAX_QUESTIONS || session.openingBusy;
+    session.targetTotal = MAX_QUESTIONS;
     notifyPet('game_generating_end');
     notifyPet('game_play_start');
-
-    const corpus = buildCorpus(session.scope, {
-      charLimit: CORPUS_FIRST_PACK_LIMIT,
-      maxNotes: CORPUS_MAX_NOTES,
-    });
-    if (session.backfilling && corpus.trim()) {
-      const token = ++backfillToken;
-      void backfillQuestions(corpus, token);
-    } else {
-      session.backfilling = false;
-    }
-
+    appendUniqueQuestions(consumeLateOpening());
+    startBackfillIfNeeded();
     return {
       handled: true,
       ok: true,
       game: true,
       gameUi: publicGameUi(),
-      message: session.backfilling
-        ? `开始答题：${session.scope.label}（题库先 ${ready} 题，后台继续补；3 条命）\n中途退出：⌘S+G。`
-        : `开始答题：${session.scope.label}（题库 ${ready} 题，3 条命）\n中途退出：⌘S+G。`,
+      message,
     };
-  }
-
-  const corpus = buildCorpus(session.scope, {
-    charLimit: CORPUS_FIRST_PACK_LIMIT,
-    maxNotes: CORPUS_MAX_NOTES,
-  });
-  if (!corpus.trim()) {
-    session.phase = 'awaiting_scope';
-    notifyPet('game_generating_end');
-    return {
-      handled: true,
-      ok: false,
-      game: true,
-      message: '这些笔记没有可出题的正文片段，换个范围试试。',
-    };
-  }
+  };
 
   try {
-    // 题库未命中：当场 LLM 出首包（并顺便写入题库供下次）
-    const first = await requestQuestions({
-      maxQuestions: EARLY_READY,
-      corpus,
-      existing: [],
-    });
-    if (!first.length) {
+    const opening = await fillOpeningFromChunks(chunkPool, []);
+    session.questions = [];
+    appendUniqueQuestions(opening);
+    session.chunkQueue = chunkPool;
+
+    // 并行已拿到题就开打，缺的后台补
+    if (!session.questions.length) {
+      const corpus = buildCorpus(session.scope, {
+        charLimit: CORPUS_FIRST_PACK_LIMIT,
+        maxNotes: CORPUS_MAX_NOTES,
+      });
+      if (corpus.trim()) {
+        try {
+          const more = await requestQuestions({
+            maxQuestions: 1,
+            corpus,
+            existing: [],
+            attempts: 1,
+          });
+          appendUniqueQuestions(more);
+        } catch (err) {
+          console.warn('[bili-pet] game quiz fallback failed:', err?.message || err);
+        }
+      }
+    }
+
+    if (!session.questions.length) {
       session.phase = 'awaiting_scope';
       notifyPet('game_generating_end');
       return {
         handled: true,
         ok: false,
         game: true,
-        message: '出题失败：模型没有返回有效题目。换个范围或再试一次。',
+        message: '出题失败：没有可用题目。换个范围或再试一次。',
       };
     }
 
-    session.questions = first;
-    try {
-      const { saveQuizBankQuestions } = require('../notes-db');
-      const byBvid = new Map();
-      for (const q of first) {
-        const bv =
-          normalizeBvid(q.sourceBvid) ||
-          scopeBvids[0] ||
-          '';
-        if (!bv) continue;
-        if (!byBvid.has(bv)) byBvid.set(bv, []);
-        byBvid.get(bv).push(q);
-      }
-      for (const [bv, list] of byBvid) {
-        const rev = Number(loadNoteDoc(bv)?.revision) || 0;
-        saveQuizBankQuestions(bv, list, { sourceRev: rev });
-      }
-    } catch {
-      /* ignore bank write */
-    }
-
     const ready = session.questions.length;
-    session.phase = 'asking';
-    session.backfilling = ready < MAX_QUESTIONS;
-    notifyPet('game_generating_end');
-    notifyPet('game_play_start');
-
-    if (session.backfilling) {
-      const token = ++backfillToken;
-      void backfillQuestions(corpus, token);
-    }
-
-    // 范围笔记若尚未预生成，后台补库存
-    try {
-      const { scheduleQuizPregenForNote } = require('../quiz-pregen');
-      for (const bv of scopeBvids.slice(0, 6)) {
-        scheduleQuizPregenForNote(bv, { reason: 'game_miss', immediate: false });
-      }
-    } catch {
-      /* ignore */
-    }
-
-    return {
-      handled: true,
-      ok: true,
-      game: true,
-      gameUi: publicGameUi(),
-      message: session.backfilling
-        ? `开始答题：${session.scope.label}（先 ${ready} 题，答完前能补则继续，补不到即通关；3 条命）\n中途退出：⌘S+G。`
-        : `开始答题：${session.scope.label}（共 ${ready} 题，3 条命）\n中途退出：⌘S+G。`,
-    };
+    return startAsking(
+      ready >= MAX_QUESTIONS
+        ? `开始答题：${session.scope.label}（共 ${ready} 题，3 条命）\n中途退出：⌘S+G。`
+        : `开始答题：${session.scope.label}（先 ${ready} 题，后台补到 ${MAX_QUESTIONS}；3 条命）\n中途退出：⌘S+G。`
+    );
   } catch (err) {
     session.phase = 'awaiting_scope';
     notifyPet('game_generating_end');
@@ -1362,7 +2025,15 @@ function answerGame(choiceIndex) {
 
   const current = session.questions[session.index];
   if (!current) {
-    // 已无下一题：不论是否还在补题，直接通关/结束，不再干等
+    if (stillExpectingMoreQuestions()) {
+      return {
+        ok: true,
+        correct: false,
+        feedback: '',
+        waitingMore: true,
+        gameUi: publicGameUi({ waitingMore: true }),
+      };
+    }
     endRunAndCancelBackfill(null);
     return finishAsEnded(false, '');
   }
@@ -1387,7 +2058,15 @@ function answerGame(choiceIndex) {
 
   session.index += 1;
   if (session.index >= session.questions.length) {
-    // 答完当前已有题：能补到的题会在答完前已经 append；此处不再等待补题
+    if (stillExpectingMoreQuestions()) {
+      return {
+        ok: true,
+        correct,
+        feedback: feedback.trim(),
+        waitingMore: true,
+        gameUi: publicGameUi({ waitingMore: true }),
+      };
+    }
     endRunAndCancelBackfill(null);
     return finishAsEnded(correct, feedback);
   }
@@ -1452,7 +2131,7 @@ async function tryHandleGameChat(question, videoMeta = {}) {
       ok: true,
       game: true,
       message:
-        '答题模式已开启。想考哪一块？可以说课程组、文件夹、当前视频，或一个大致主题。\n也可直接发：/game 考一下某某\n选好范围后会自动出题；中途退出请按 ⌘S+G。',
+        '答题模式已开启。想考哪一块？可以说课程组、文件夹、当前视频，或一个考点。\n例如：/game 考一下线代 · 高数的积分 · 反向传播\n选好范围后会自动出题；中途退出请按 ⌘S+G。',
     };
   }
 

@@ -20,6 +20,21 @@
 
 > 使用多分 P 记笔记前，请重新加载浏览器扩展（bridge ≥ 0.2.16）并重启桌宠。
 
+## BiliOtter 1.20 更新内容
+- **修改了无法新建文件夹的bug**；
+- **修正了思维导图逻辑**：后端逻辑改为mind elixir开源仓库，增加AI扩展功能和拖动编辑功能；
+- **优化了双语支持**：支持通过笔记语言生成相应语言的总结和思维导图扩展；
+- **修正了game skill逻辑**：删除题库，提高题目生成速度；
+- **修正了学习不计时的bug**；
+- **优化了数据库页面**：修正了缩放变形的问题
+- **优化了对话框字体**；
+- **修改了分心切屏逻辑**；
+- **更新了代码块逻辑**：提高了美观性，支持选择语言；
+- **优化了对话框agent的任务理解**；
+- **修正了反复云端数据拉取的bug**；
+- **修正了云端和本地数据拉取冲突的bug**；
+- **增加了笔记批量添加功能**；
+- **增加了废纸篓功能**.
 ---
 
 ## 功能一览
@@ -48,7 +63,7 @@
 ```
 bili-pet/
 ├── canva.js / paths.js / preload.js
-├── notes-db.js / cloud-sync.js / llm.js / quiz-pregen.js
+├── notes-db.js / cloud-sync.js / llm.js
 ├── skills/  prompts/  chat/  friends/  note_cornell/  launcher/
 ├── internet_extension/
 ├── cloud-api/                 # 鉴权、KB、好友、LLM 代理
@@ -87,7 +102,6 @@ npm start
 | `LLM_API_KEY` | **分发请留空**；仅本地直连调试时填写 |
 | `LLM_DIRECT` | `true` 时强制本机直连厂商（需本地 Key） |
 | `CLOUD_DEVICE_SECRET` | 与服务器 `DEVICE_AUTH_SECRET` 一致时可走设备鉴权 |
-| `QUIZ_PREGEN_ENABLED` | 笔记成熟后后台预生成 `/game` 题库 |
 
 开发若要直连模型：`.env` 设 `LLM_DIRECT=true` 并填写自己的 `LLM_API_KEY`。
 
@@ -173,7 +187,6 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm run pack:win
 
 未签名：Mac 需右键打开；Windows 可能需「仍要运行」。
 
-**分发安全：** 客户端不要带真实 `LLM_API_KEY`；Key 只在 `cloud-api/.env`。打包脚本会跳过本机 `.env`。
 
 ---
 

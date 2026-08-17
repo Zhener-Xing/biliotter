@@ -43,7 +43,7 @@
     </div>
 
     <div class="notes-hint" id="notes-hint">
-      以你写的为主，改动实时入库。「一键整理」只在文末增补 AI 区块，不改你的原文；字幕按已看进度整段参考。可拖入截图，支持 LaTeX 与代码块。
+      以你写的为主，改动实时入库。「一键整理」只在文末增补 AI 区块，不改你的原文；字幕按已看进度整段参考。可拖入截图，支持 LaTeX 与代码块（输入 ``` 可选语言与介绍，Tab 缩进）。
     </div>
 
     <article class="notes-sheet" id="notes-sheet" aria-label="笔记正文">
@@ -52,11 +52,47 @@
           id="notes-editor"
           class="notes-editor"
           spellcheck="true"
-          placeholder="在此撰写 Markdown…&#10;&#10;公式：$E=mc^2$ 或 $$\\int_0^1 x^2 dx$$&#10;代码：&#10;```js&#10;console.log(1)&#10;```&#10;截图：直接拖进来&#10;&#10;写完或看了一段后，点右上角「一键整理」"
+          placeholder="在此撰写 Markdown…&#10;&#10;公式：$E=mc^2$ 或 $$\\int_0^1 x^2 dx$$&#10;代码：输入 ``` 选择语言与介绍&#10;截图：直接拖进来&#10;&#10;编辑区支持 Tab / Shift+Tab 缩进"
         ></textarea>
         <div class="notes-preview md-body" id="notes-preview" aria-label="预览"></div>
       </div>
     </article>
+
+    <div class="code-fence-pop" id="code-fence-pop" hidden>
+      <p class="code-fence-pop-title">代码块</p>
+      <label class="code-fence-field">
+        <span>语言</span>
+        <select id="code-lang">
+          <option value="">纯文本</option>
+          <option value="js" selected>JavaScript</option>
+          <option value="ts">TypeScript</option>
+          <option value="python">Python</option>
+          <option value="java">Java</option>
+          <option value="cpp">C / C++</option>
+          <option value="go">Go</option>
+          <option value="rust">Rust</option>
+          <option value="sql">SQL</option>
+          <option value="bash">Bash</option>
+          <option value="json">JSON</option>
+          <option value="html">HTML</option>
+          <option value="css">CSS</option>
+          <option value="markdown">Markdown</option>
+        </select>
+      </label>
+      <label class="code-fence-field">
+        <span>简短介绍</span>
+        <input
+          type="text"
+          id="code-caption"
+          placeholder="可选，例如：二分查找模板"
+          autocomplete="off"
+        />
+      </label>
+      <div class="code-fence-actions">
+        <button type="button" class="notes-organize" id="code-fence-ok">确定</button>
+        <button type="button" class="notes-share-cancel" id="code-fence-cancel">跳过</button>
+      </div>
+    </div>
   </div>
 
   <script src="vendor/marked.min.js"></script>

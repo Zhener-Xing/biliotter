@@ -26,7 +26,7 @@ const {
 const { handleLlmChatCompletions, llmConfigured } = require('./llm-proxy');
 
 const app = express();
-app.use(express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '32mb' }));
 
 function wrap(name, fn) {
   return (req, res) => {

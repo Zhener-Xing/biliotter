@@ -6,6 +6,10 @@ const {
   createCourseFolder,
   addCourseGroupItem,
   updateCourseGroupItem,
+  listNoteDocs,
+  searchNotes,
+  loadNoteDoc,
+  normalizeBvid,
 } = require('./notes-db');
 
 let lastCourseContext = {
@@ -75,9 +79,20 @@ function looksLikeCourseAction(question) {
   if (/稍后再看|待看|晚点看|我的收藏|收藏夹/.test(q) && !/课程组|文件夹/.test(q)) {
     return false;
   }
-  return /课程组|文件夹|加入.*课|放进|放到|新建.*课|创建.*课|建个.*课|建一个.*课|在里面|放进去|保存.*笔记/.test(
-    q
-  );
+  if (/笔记/.test(q) && /放进|放到|加入|加到|保存到|保存进/.test(q) && /课程组|文件夹/.test(q)) {
+    return true;
+  }
+  if (/课程组|文件夹/.test(q)) {
+    return /新建|创建|建立|建个|建一个|建一下|加个|加入|放进|放到|加到|在里面|其中|下面|底下|里建|下建|帮我建|帮我创建/.test(
+      q
+    );
+  }
+  return /新建.*课|创建.*课|建个.*课|建一个.*课|建一下.*课|建立.*课/.test(q);
+}
+
+function mentionsVideoMove(question) {
+  const q = String(question || '').trim();
+  return /视频|笔记|放进|放到|加入|加进|放进去|保存到|保存进|加到/.test(q);
 }
 
 function isAffirmative(q) {
@@ -136,15 +151,291 @@ function stripCourseSuffix(name) {
     .trim();
 }
 
+function stripNoteSuffix(name) {
+  return String(name || '')
+    .trim()
+    .replace(/^(把|将)/, '')
+    .replace(/[「」『』“”"']/g, '')
+    .replace(/这几篇$/u, '')
+    .replace(/几篇$/u, '')
+    .replace(/(这篇)?笔记$/u, '')
+    .replace(/(这个|当前|本篇)?(视频|笔记)$/u, '')
+    .trim();
+}
+
+/** 把「线性代数、积分和极限」或「A笔记和B笔记」拆成多标题 */
+function splitNoteTitles(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return [];
+  const hadBatchHint = /这几篇|几篇/.test(s);
+  s = s
+    .replace(/^把|^将/, '')
+    .replace(/这几篇$/u, '')
+    .replace(/几篇$/u, '')
+    .trim();
+
+  let parts;
+  if (/笔记\s*[、，,和与及]/.test(s) || /[、，,和与及]\s*[^、，,和与及]+笔记/.test(s)) {
+    parts = s.split(/\s*(?:笔记)?\s*[、，,和与及/]+\s*/);
+  } else if (/[、，,/]/.test(s)) {
+    parts = s.split(/\s*[、，,/]\s*/).flatMap((p) =>
+      /[和与及]/.test(p) ? String(p).split(/\s*[和与及]\s*/) : [p]
+    );
+  } else if (hadBatchHint && /[和与及]/.test(s)) {
+    parts = s.split(/\s*[和与及]\s*/);
+  } else {
+    parts = [s];
+  }
+
+  const out = [];
+  const seen = new Set();
+  for (const p of parts) {
+    const t = stripNoteSuffix(p) || String(p || '').trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+function collectNoteQueries(intent = {}) {
+  const out = [];
+  const seen = new Set();
+  const push = (raw) => {
+    const parts = splitNoteTitles(raw);
+    if (parts.length) {
+      for (const t of parts) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        out.push(t);
+      }
+      return;
+    }
+    const single = stripNoteSuffix(raw) || String(raw || '').trim();
+    if (!single || seen.has(single)) return;
+    seen.add(single);
+    out.push(single);
+  };
+  if (Array.isArray(intent.noteTitles)) {
+    for (const t of intent.noteTitles) push(t);
+  }
+  if (intent.noteTitle) push(intent.noteTitle);
+  if (intent.noteQuery) push(intent.noteQuery);
+  return out;
+}
+
+function resolveManyNotes(queries, fallbackMeta = {}) {
+  const list = Array.isArray(queries) ? queries.filter(Boolean) : [];
+  if (!list.length) {
+    const one = resolveNoteTarget('', fallbackMeta);
+    if (one.ok) return { ok: true, notes: [one], failures: [] };
+    return { ok: false, notes: [], failures: [{ query: '', resolved: one }] };
+  }
+  const notes = [];
+  const failures = [];
+  const seenBvid = new Set();
+  for (const q of list) {
+    const r = resolveNoteTarget(q, fallbackMeta);
+    if (!r.ok) {
+      failures.push({ query: q, resolved: r });
+      continue;
+    }
+    const id = String(r.bvid || '').trim();
+    if (id && seenBvid.has(id)) continue;
+    if (id) seenBvid.add(id);
+    notes.push({ ...r, query: q });
+  }
+  return { ok: notes.length > 0, notes, failures };
+}
+
+function formatNoteResolveFailures(failures) {
+  if (!failures?.length) return '';
+  return failures
+    .map((f) => noteResolveErrorMessage(f.resolved) || `没找到「${f.query}」`)
+    .join(' ');
+}
+
+function addResolvedNotesToGroup(groupId, notes, folderId = null) {
+  let ok = 0;
+  let fail = 0;
+  const failNames = [];
+  const okNames = [];
+  for (const n of notes || []) {
+    const added = ensureItemInGroup(groupId, {
+      bvid: n.bvid,
+      title: n.title,
+      folderId,
+    });
+    if (added.ok) {
+      ok += 1;
+      okNames.push(n.title || n.bvid);
+    } else {
+      fail += 1;
+      failNames.push(n.title || n.bvid || n.query || '');
+    }
+  }
+  return { ok, fail, failNames, okNames };
+}
+
+function formatBatchAddMessage({
+  groupTitle,
+  folderPart,
+  okNames,
+  failNames,
+  resolveFailures,
+  prefix = '',
+}) {
+  const parts = [];
+  if (prefix) parts.push(prefix);
+  if (okNames.length === 1) {
+    parts.push(
+      `已把笔记「${okNames[0]}」加入课程组「${groupTitle}」${folderPart || ''}`
+    );
+  } else if (okNames.length > 1) {
+    const preview =
+      okNames.length <= 3
+        ? okNames.map((n) => `「${n}」`).join('、')
+        : okNames
+            .slice(0, 3)
+            .map((n) => `「${n}」`)
+            .join('、') + ` 等 ${okNames.length} 篇`;
+    parts.push(
+      `已把 ${okNames.length} 篇笔记（${preview}）加入课程组「${groupTitle}」${folderPart || ''}`
+    );
+  }
+  if (failNames.length) {
+    parts.push(`未能加入：${failNames.map((n) => `「${n}」`).join('、')}`);
+  }
+  if (resolveFailures?.length) {
+    parts.push(formatNoteResolveFailures(resolveFailures));
+  }
+  const body = parts.filter(Boolean).join('。').replace(/。{2,}/g, '。');
+  if (!body) return '';
+  return /[。！？]$/.test(body) ? body : `${body}。`;
+}
+
+function resolveNoteTarget(noteQuery, fallbackMeta = {}) {
+  const raw = String(noteQuery || '').trim();
+  if (!raw || /^(这个|当前|本篇|正在看的?)(视频|笔记)?$/u.test(raw)) {
+    const bvid = normalizeBvid(fallbackMeta.bvid) || String(fallbackMeta.bvid || '').trim();
+    if (bvid) {
+      return {
+        ok: true,
+        bvid,
+        title: String(fallbackMeta.title || '').trim() || bvid,
+        from: 'current',
+      };
+    }
+    return { ok: false, error: 'no_current' };
+  }
+
+  const q = stripNoteSuffix(raw) || raw;
+  const asBv = normalizeBvid(q) || (/^BV[\w]+/i.test(q) ? q : '');
+  if (asBv) {
+    const doc = loadNoteDoc(asBv);
+    if (doc) {
+      return {
+        ok: true,
+        bvid: doc.bvid || asBv,
+        title: doc.title || asBv,
+        from: 'bvid',
+      };
+    }
+    return { ok: false, error: 'not_found', query: asBv };
+  }
+
+  const notes = listNoteDocs();
+  const hit = findBestByTitle(notes, q, (n) => n.title);
+  if (hit && hit.score >= 55) {
+    return {
+      ok: true,
+      bvid: hit.item.bvid,
+      title: hit.item.title,
+      score: hit.score,
+      from: 'title',
+    };
+  }
+
+  const searched = searchNotes(q, { limit: 8 });
+  const found = Array.isArray(searched?.notes) ? searched.notes : [];
+  if (found.length === 1) {
+    return {
+      ok: true,
+      bvid: found[0].bvid,
+      title: found[0].title,
+      from: 'search',
+    };
+  }
+  if (found.length > 1) {
+    const ranked = found
+      .map((n) => ({ note: n, score: scoreName(q, n.title) }))
+      .sort((a, b) => b.score - a.score);
+    if (ranked[0].score >= 70 && ranked[0].score - (ranked[1]?.score || 0) >= 15) {
+      return {
+        ok: true,
+        bvid: ranked[0].note.bvid,
+        title: ranked[0].note.title,
+        score: ranked[0].score,
+        from: 'search',
+      };
+    }
+    return {
+      ok: false,
+      error: 'ambiguous',
+      query: q,
+      candidates: ranked.slice(0, 5).map((x) => x.note),
+    };
+  }
+
+  return { ok: false, error: 'not_found', query: q };
+}
+
+function findFolderAcrossGroups(folderTitle) {
+  const name = String(folderTitle || '').trim();
+  if (!name) return null;
+  let best = null;
+  for (const g of listCourseGroups()) {
+    const detail = getCourseGroup(g.id) || g;
+    const hit = findBestByTitle(detail.folders || [], name, (f) => f.title);
+    if (!hit) continue;
+    if (!best || hit.score > best.score) {
+      best = {
+        group: detail,
+        folder: hit.item,
+        score: hit.score,
+      };
+    }
+  }
+  return best && best.score >= 50 ? best : null;
+}
+
+function noteResolveErrorMessage(resolved) {
+  if (!resolved || resolved.ok) return '';
+  if (resolved.error === 'ambiguous') {
+    const names = (resolved.candidates || [])
+      .map((n) => `「${n.title || n.bvid}」`)
+      .join('、');
+    return `找到多篇和「${resolved.query}」相近的笔记：${names}。请说得更具体一点，或带上 BV 号。`;
+  }
+  if (resolved.error === 'not_found') {
+    return `知识库里没找到「${resolved.query || '这篇'}」笔记。可以换个标题关键词，或先打开对应视频。`;
+  }
+  if (resolved.error === 'no_current') {
+    return '请指明笔记名字，例如「把线性代数笔记放进线代课程组」，或先打开对应视频。';
+  }
+  return '没能定位到要操作的笔记，请再说一次笔记标题。';
+}
+
 function heuristicParseIntent(question, { recentGroupTitle } = {}) {
   const q = String(question || '').trim();
   if (!q) return null;
 
   const recent = String(recentGroupTitle || lastCourseContext.groupTitle || '').trim();
+  const withVideo = mentionsVideoMove(q);
 
   const normalizeGroupTitle = (raw) => {
     let t = String(raw || '').trim();
-    t = t.replace(/^(到|至|进|入)/, '');
+    t = t.replace(/^(到|至|进|入|叫|名为|一个)/, '');
     t = stripCourseSuffix(t);
     if (!t) return '';
     return /课程组$/.test(t) ? t : `${t}课程组`;
@@ -153,43 +444,158 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
   const normalizeFolderTitle = (raw) =>
     String(raw || '')
       .trim()
+      .replace(/^(叫|名为|一个|文件夹)/, '')
       .replace(/(文件夹|目录)$/u, '')
       .replace(/[下里中]$/u, '')
       .trim();
 
+  // 把「xx」笔记放进课程组 / 文件夹（支持「A、B、C这几篇笔记」）
   let m =
-    q.match(/新建(?:一个)?(.+?)课程组/) ||
-    q.match(/创建(?:一个)?(.+?)课程组/);
+    q.match(
+      /(?:把|将)?[「『""]?(.+?)[」』""]?(?:这篇|这几篇)?笔记(?:放进|放到|加入|加到|保存到|保存进)(.+?)课程组(?:的|里的|下的|里|下)?(.+?)文件夹/
+    ) ||
+    q.match(
+      /(?:把|将)(.+?)(?:这篇|这几篇)?笔记(?:放进|放到|加入|加到|保存到|保存进)(.+?)课程组(?:的|里的|下的|里|下)?(.+?)文件夹/
+    );
   if (m) {
-    const groupTitle = normalizeGroupTitle(m[1]);
-    const folderM = q.match(/([A-Za-z0-9_-]+|[\u4e00-\u9fff]{1,20}?)文件夹/);
+    const titles = splitNoteTitles(m[1]);
     return {
-      action: 'create_group_and_add',
-      groupTitle,
-      folderTitle: folderM ? normalizeFolderTitle(folderM[1]) : '',
+      action: 'add_to_group',
+      noteTitle: titles[0] || stripNoteSuffix(m[1]),
+      noteTitles: titles,
+      groupTitle: normalizeGroupTitle(m[2]),
+      folderTitle: normalizeFolderTitle(m[3]),
       topic: '',
       createFolderIfMissing: true,
-      confidence: 0.9,
+      confidence: 0.94,
       source: 'heuristic',
     };
   }
 
   m =
-    q.match(/在里面(?:再)?创建(?:一个)?(.+?)文件夹/) ||
     q.match(
-      /在(?:其中|该课程组|这个课程组)(?:里|中)?(?:再)?创建(?:一个)?(.+?)文件夹/
+      /(?:把|将)?[「『""]?(.+?)[」』""]?(?:这篇|这几篇)?笔记(?:放进|放到|加入|加到|保存到|保存进)(.+?)课程组/
     ) ||
-    q.match(/创建(?:一个)?(.+?)文件夹/);
-  if (m && (recent || /在里面|其中|该课程组|这个课程组|创建.+文件夹/.test(q))) {
-    const folderTitle = normalizeFolderTitle(m[1]);
-    if (folderTitle && (recent || /在里面|其中|该课程组|这个课程组/.test(q))) {
+    q.match(
+      /(?:把|将)(.+?)(?:这篇|这几篇)?笔记(?:放进|放到|加入|加到|保存到|保存进)(.+?)课程组/
+    );
+  if (m) {
+    const titles = splitNoteTitles(m[1]);
+    return {
+      action: 'add_to_group',
+      noteTitle: titles[0] || stripNoteSuffix(m[1]),
+      noteTitles: titles,
+      groupTitle: normalizeGroupTitle(m[2]),
+      folderTitle: '',
+      topic: '',
+      createFolderIfMissing: false,
+      confidence: 0.93,
+      source: 'heuristic',
+    };
+  }
+
+  m =
+    q.match(
+      /(?:把|将)?[「『""]?(.+?)[」』""]?(?:这篇|这几篇)?笔记(?:放进|放到|加入|加到|保存到|保存进)(.+?)文件夹/
+    ) ||
+    q.match(
+      /(?:把|将)(.+?)(?:这篇|这几篇)?笔记(?:放进|放到|加入|加到|保存到|保存进)(.+?)文件夹/
+    );
+  if (m) {
+    const titles = splitNoteTitles(m[1]);
+    return {
+      action: 'add_to_group',
+      noteTitle: titles[0] || stripNoteSuffix(m[1]),
+      noteTitles: titles,
+      groupTitle: recent || '',
+      folderTitle: normalizeFolderTitle(m[2]),
+      topic: '',
+      createFolderIfMissing: true,
+      confidence: recent ? 0.9 : 0.78,
+      source: 'heuristic',
+    };
+  }
+
+  // 在「某课程组」下/里 建文件夹
+  m =
+    q.match(
+      /在(.+?)课程组(?:里|中|下|下面|底下)?(?:再)?(?:新建|创建|建立|建一个|建个|加一个|加个)(?:一个)?(?:文件夹(?:叫|名为)?)?(.+?)(?:文件夹)?$/
+    ) ||
+    q.match(
+      /在(.+?)(?:里|中|下|下面|底下)(?:再)?(?:新建|创建|建立|建一个|建个|加一个|加个)(?:一个)?(?:文件夹(?:叫|名为)?)?(.+?)文件夹/
+    ) ||
+    q.match(
+      /(?:给|为)(.+?)课程组(?:再)?(?:新建|创建|建立|建一个|建个|加一个|加个)(?:一个)?(?:文件夹(?:叫|名为)?)?(.+?)(?:文件夹)?$/
+    );
+  if (m) {
+    const groupTitle = normalizeGroupTitle(m[1]);
+    const folderTitle = normalizeFolderTitle(m[2]);
+    if (groupTitle && folderTitle) {
       return {
-        action: 'create_folder_and_add',
+        action: withVideo ? 'create_folder_and_add' : 'create_folder',
+        groupTitle,
+        folderTitle,
+        topic: '',
+        createFolderIfMissing: true,
+        confidence: 0.93,
+        source: 'heuristic',
+      };
+    }
+  }
+
+  // 新建课程组（可附带文件夹）
+  m =
+    q.match(/(?:新建|创建|建立|建一个|建个|帮我建|帮我创建)(?:一个)?(?:叫|名为)?(.+?)课程组/) ||
+    q.match(/课程组(?:名叫|叫|名为)(.+?)(?:$|[，,。！!\s])/);
+  if (m) {
+    const groupTitle = normalizeGroupTitle(m[1]);
+    const rest = q.slice((m.index || 0) + m[0].length);
+    const folderM = rest.match(
+      /(?:，|,|。|；|;|和|并|同时)?(?:再)?(?:在)?(?:下面|底下|其中|里面)?(?:再)?(?:新建|创建|建立|建一个|建个)?(?:一个)?([A-Za-z0-9_-]+|[\u4e00-\u9fff]{1,16})文件夹/
+    );
+    return {
+      action: withVideo ? 'create_group_and_add' : 'create_group',
+      groupTitle,
+      folderTitle: folderM ? normalizeFolderTitle(folderM[1]) : '',
+      topic: '',
+      createFolderIfMissing: true,
+      confidence: 0.92,
+      source: 'heuristic',
+    };
+  }
+
+  // 在里面 / 该课程组 创建文件夹
+  m =
+    q.match(/在里面(?:再)?(?:新建|创建|建立|建一个|建个|加一个|加个)(?:一个)?(.+?)(?:文件夹)?$/) ||
+    q.match(
+      /在(?:其中|该课程组|这个课程组|刚才(?:的)?课程组)(?:里|中|下)?(?:再)?(?:新建|创建|建立|建一个|建个|加一个|加个)(?:一个)?(.+?)(?:文件夹)?$/
+    ) ||
+    q.match(/(?:新建|创建|建立|建一个|建个|加一个|加个)(?:一个)?(.+?)文件夹/);
+  if (m) {
+    const folderTitle = normalizeFolderTitle(m[1]);
+    const hasRef = /在里面|其中|该课程组|这个课程组|刚才/.test(q);
+    if (folderTitle && (recent || hasRef || /文件夹/.test(q))) {
+      if (!recent && !hasRef && !/在里面|其中|该课程组|这个课程组/.test(q)) {
+        // 「创建 XX 文件夹」但无上下文：仍尝试用 recent；没有则低置信度交给 LLM/追问
+        if (!recent) {
+          return {
+            action: withVideo ? 'create_folder_and_add' : 'create_folder',
+            groupTitle: '',
+            folderTitle,
+            topic: '',
+            createFolderIfMissing: true,
+            confidence: 0.62,
+            source: 'heuristic',
+          };
+        }
+      }
+      return {
+        action: withVideo ? 'create_folder_and_add' : 'create_folder',
         groupTitle: recent || '',
         folderTitle,
         topic: '',
         createFolderIfMissing: true,
-        confidence: recent ? 0.92 : 0.72,
+        confidence: recent || hasRef ? 0.92 : 0.7,
         source: 'heuristic',
       };
     }
@@ -198,7 +604,7 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
   m = q.match(/在(.+?)课程组(?:里|中)?(?:再)?创建(?:一个)?(.+?)文件夹/);
   if (m) {
     return {
-      action: 'create_folder_and_add',
+      action: withVideo ? 'create_folder_and_add' : 'create_folder',
       groupTitle: normalizeGroupTitle(m[1]),
       folderTitle: normalizeFolderTitle(m[2]),
       topic: '',
@@ -225,7 +631,7 @@ function heuristicParseIntent(question, { recentGroupTitle } = {}) {
     };
   }
 
-  m = q.match(/(?:加入|放进|放到)(.+?)课程组(?!.*文件夹)/);
+  m = q.match(/(?:加入|放进|放到|加到)(.+?)课程组(?!.*文件夹)/);
   if (m) {
     return {
       action: 'add_to_group',
@@ -259,16 +665,21 @@ async function parseCourseActionIntent(question, { bvid, title, history } = {}) 
   const groups = listCourseGroups();
   const recentGroupTitle = extractRecentGroupFromHistory(history);
   const heuristic = heuristicParseIntent(question, { recentGroupTitle });
+  const noteDocs = listNoteDocs().slice(0, 40);
 
   const payload = {
     userMessage: String(question || '').trim(),
     recentCourseGroup: recentGroupTitle || null,
     dialogueHint:
-      '若用户说「在里面」「该课程组」「其中」，指代 recentCourseGroup；若为空再看已有课程组列表。',
+      '若用户说「在里面」「该课程组」「其中」，指代 recentCourseGroup；若把「某笔记」或「A、B、C这几篇笔记」放进课程组/文件夹，填写 noteTitle / noteTitles；若为空再看已有课程组与笔记列表。',
     currentVideo: {
       bvid: bvid || null,
       title: title || null,
     },
+    existingNotes: noteDocs.map((n) => ({
+      bvid: n.bvid,
+      title: n.title,
+    })),
     existingCourseGroups: groups.map((g) => ({
       id: g.id,
       title: g.title,
@@ -299,6 +710,8 @@ async function parseCourseActionIntent(question, { bvid, title, history } = {}) 
   const action = String(obj.action || 'none').trim();
   const allowed = new Set([
     'none',
+    'create_group',
+    'create_folder',
     'add_to_group',
     'create_folder_and_add',
     'create_group_and_add',
@@ -307,29 +720,65 @@ async function parseCourseActionIntent(question, { bvid, title, history } = {}) 
     action: allowed.has(action) ? action : 'none',
     groupTitle: String(obj.groupTitle || '').trim(),
     folderTitle: String(obj.folderTitle || '').trim(),
+    noteTitle: String(obj.noteTitle || obj.noteQuery || '').trim(),
+    noteTitles: Array.isArray(obj.noteTitles)
+      ? obj.noteTitles.map((t) => String(t || '').trim()).filter(Boolean)
+      : [],
     topic: String(obj.topic || '').trim(),
     createFolderIfMissing: Boolean(obj.createFolderIfMissing),
     confidence: Math.max(0, Math.min(1, Number(obj.confidence) || 0)),
     source: 'llm',
   };
 
+  if (!llmIntent.noteTitles.length && llmIntent.noteTitle) {
+    llmIntent.noteTitles = splitNoteTitles(llmIntent.noteTitle);
+  }
+  if (llmIntent.noteTitles.length && !llmIntent.noteTitle) {
+    llmIntent.noteTitle = llmIntent.noteTitles[0];
+  }
+  const hasNamedNotes = Boolean(
+    llmIntent.noteTitle || (llmIntent.noteTitles && llmIntent.noteTitles.length)
+  );
+
   if (
-    (!llmIntent.groupTitle || /里面|其中|该课程组|这个课程组/.test(question)) &&
+    (!llmIntent.groupTitle || /里面|其中|该课程组|这个课程组|刚才/.test(question)) &&
     recentGroupTitle &&
-    (llmIntent.action === 'create_folder_and_add' ||
+    (llmIntent.action === 'create_folder' ||
+      llmIntent.action === 'create_folder_and_add' ||
       llmIntent.action === 'add_to_group')
   ) {
     llmIntent.groupTitle = llmIntent.groupTitle || recentGroupTitle;
     llmIntent.confidence = Math.max(llmIntent.confidence, 0.8);
   }
 
+  // 点名某笔记时，一定按「加入」处理，不要降成只建结构
+  if (hasNamedNotes && llmIntent.action === 'create_folder') {
+    llmIntent.action = 'add_to_group';
+    llmIntent.createFolderIfMissing = true;
+  }
+  if (hasNamedNotes && llmIntent.action === 'create_group') {
+    llmIntent.action = 'create_group_and_add';
+  }
+
+  // 用户没提放视频/笔记时，把 *_and_add 降为纯创建
+  if (
+    !mentionsVideoMove(question) &&
+    !hasNamedNotes &&
+    (llmIntent.action === 'create_group_and_add' ||
+      llmIntent.action === 'create_folder_and_add')
+  ) {
+    llmIntent.action =
+      llmIntent.action === 'create_group_and_add' ? 'create_group' : 'create_folder';
+  }
+
   if (llmIntent.action === 'none' || llmIntent.confidence < 0.55) {
-    if (heuristic && heuristic.confidence >= 0.7) return heuristic;
+    if (heuristic && heuristic.confidence >= 0.62) return heuristic;
   }
   if (
     heuristic &&
     heuristic.confidence >= 0.85 &&
-    llmIntent.confidence < heuristic.confidence
+    (llmIntent.confidence < heuristic.confidence ||
+      ((heuristic.noteTitle || heuristic.noteTitles?.length) && !hasNamedNotes))
   ) {
     return heuristic;
   }
@@ -405,36 +854,105 @@ function clearPending() {
 }
 
 function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {}) {
-  const action = intent?.action || 'none';
+  let action = intent?.action || 'none';
   if (action === 'none') {
     return { handled: false };
   }
 
-  const key = String(videoMeta.bvid || '').trim();
-  if (!key) {
-    return {
-      handled: true,
-      ok: false,
-      message: '现在没有检测到正在播放的视频。请先打开一个 B 站视频再试。',
+  const noteQueries = collectNoteQueries(intent);
+  const noteQuery = noteQueries[0] || String(intent.noteTitle || intent.noteQuery || '').trim();
+  const wantsNotes =
+    noteQueries.length > 0 ||
+    action === 'add_to_group' ||
+    action === 'create_group_and_add' ||
+    action === 'create_folder_and_add';
+
+  let workingMeta = {
+    bvid: videoMeta?.bvid || null,
+    title: String(videoMeta?.title || '').trim(),
+  };
+  let notesToAdd = [];
+  let resolveFailures = [];
+
+  if (wantsNotes) {
+    const batch = resolveManyNotes(noteQueries, workingMeta);
+    notesToAdd = batch.notes;
+    resolveFailures = batch.failures || [];
+    if (!notesToAdd.length) {
+      return {
+        handled: true,
+        ok: false,
+        message:
+          formatNoteResolveFailures(resolveFailures) ||
+          '要把笔记/视频加进课程组，请写明笔记名（如「把线性代数、积分笔记放进线代课程组」），或先打开对应视频。',
+      };
+    }
+    workingMeta = {
+      bvid: notesToAdd[0].bvid,
+      title: notesToAdd[0].title,
     };
   }
 
-  const videoTitle = String(videoMeta.title || '').trim();
+  const key =
+    normalizeBvid(workingMeta.bvid) || String(workingMeta.bvid || '').trim();
+  const videoTitle = String(workingMeta.title || '').trim();
+  videoMeta = workingMeta;
+  const addVideo = notesToAdd.length > 0;
+  const noteTitlesForConfirm = notesToAdd.map((n) => n.query || n.title).filter(Boolean);
 
-  if (action === 'create_group_and_add') {
+  if (action === 'add_to_group' && !addVideo) {
+    return {
+      handled: true,
+      ok: false,
+      message:
+        '要把笔记/视频加进课程组，请写明笔记名（如「把线性代数笔记放进线代课程组」），或先打开对应视频。',
+    };
+  }
+
+  // —— 新建课程组（可顺带建文件夹；有目标笔记/视频时再放入）——
+  if (action === 'create_group' || action === 'create_group_and_add') {
     let groupTitle =
       String(intent.groupTitle || '').trim() ||
-      (videoTitle ? `${videoTitle.slice(0, 24)}` : '未命名课程组');
+      (videoTitle ? `${videoTitle.slice(0, 24)}` : '');
+    if (!groupTitle) {
+      return {
+        handled: true,
+        ok: false,
+        message: '请告诉我课程组名字，例如「新建线性代数课程组」。',
+      };
+    }
     if (!/课程组$/.test(groupTitle)) groupTitle += '课程组';
 
     const existing = findBestByTitle(listCourseGroups(), groupTitle, (g) => g.title);
     if (existing && existing.score >= 80) {
       const next = {
         ...intent,
-        action: intent.folderTitle ? 'create_folder_and_add' : 'add_to_group',
+        noteTitle: noteQuery || intent.noteTitle || '',
+        noteTitles: noteTitlesForConfirm.length
+          ? noteTitlesForConfirm
+          : intent.noteTitles || noteQueries,
+        action: intent.folderTitle
+          ? addVideo
+            ? 'create_folder_and_add'
+            : 'create_folder'
+          : addVideo
+            ? 'add_to_group'
+            : 'create_folder',
         groupTitle: existing.item.title,
         createFolderIfMissing: Boolean(intent.folderTitle) || forceCreate,
       };
+      // 已有同名组且只想建组：直接说明已存在
+      if (!intent.folderTitle && !addVideo) {
+        rememberCourse(existing.item);
+        return {
+          handled: true,
+          ok: true,
+          message: `课程组「${existing.item.title}」已经存在，不用重复创建。可以说「在里面创建某某文件夹」。`,
+        };
+      }
+      if (!intent.folderTitle && addVideo) {
+        next.action = 'add_to_group';
+      }
       return executeCourseAction(next, videoMeta, { forceCreate });
     }
 
@@ -469,31 +987,66 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
       folderTitle = folder.folderTitle || wantFolder;
     }
 
-    const added = ensureItemInGroup(created.group.id, {
-      bvid: key,
-      title: videoTitle,
-      folderId,
-    });
-    if (!added.ok) {
-      rememberCourse(created.group, folderTitle, folderId);
+    rememberCourse(created.group, folderTitle, folderId);
+    clearPending();
+
+    if (addVideo) {
+      const result = addResolvedNotesToGroup(created.group.id, notesToAdd, folderId);
+      const where = folderTitle ? `，放到文件夹「${folderTitle}」` : '，放在课程组下';
+      const prefix = `好的，已新建课程组「${groupTitle}」${folderTitle ? `，文件夹「${folderTitle}」也建好了` : ''}`;
+      if (!result.ok) {
+        return {
+          handled: true,
+          ok: false,
+          message: formatBatchAddMessage({
+            groupTitle,
+            folderPart: where,
+            okNames: result.okNames,
+            failNames: result.failNames,
+            resolveFailures,
+            prefix,
+          }) || `${prefix}，但笔记没加进去。`,
+        };
+      }
       return {
         handled: true,
-        ok: false,
-        message: `课程组「${groupTitle}」已创建，但当前视频没加进去，可以说「加入${groupTitle}」再试一次。`,
+        ok: true,
+        message: formatBatchAddMessage({
+          groupTitle,
+          folderPart: where,
+          okNames: result.okNames,
+          failNames: result.failNames,
+          resolveFailures,
+          prefix,
+        }),
       };
     }
 
-    rememberCourse(created.group, folderTitle, folderId);
-    clearPending();
-    const where = folderTitle ? `文件夹「${folderTitle}」` : '根目录（未分类）';
+    if (folderTitle) {
+      return {
+        handled: true,
+        ok: true,
+        message: `好的，已新建课程组「${groupTitle}」，并在其下创建文件夹「${folderTitle}」。`,
+      };
+    }
     return {
       handled: true,
       ok: true,
-      message: `好的，已新建课程组「${groupTitle}」，并把当前视频放到${where}。`,
+      message: `好的，已新建课程组「${groupTitle}」。可以说「在里面创建某某文件夹」继续整理。`,
     };
   }
 
+  // —— 解析目标课程组 ——
   let groupTitle = String(intent.groupTitle || '').trim();
+  let folderTitleAim = String(intent.folderTitle || '').trim();
+  if (!groupTitle && folderTitleAim && addVideo) {
+    const found = findFolderAcrossGroups(folderTitleAim);
+    if (found) {
+      groupTitle = found.group.title;
+      folderTitleAim = found.folder.title;
+      intent = { ...intent, groupTitle, folderTitle: folderTitleAim };
+    }
+  }
   if (!groupTitle && lastCourseContext.groupTitle) {
     groupTitle = lastCourseContext.groupTitle;
   }
@@ -502,7 +1055,7 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
       handled: true,
       ok: false,
       message:
-        '我还不确定要操作哪个课程组。可以说名字，例如「加入线性代数课程组」，或先说「新建线性代数课程组」。',
+        '我还不确定要放到哪个课程组。可以说「把某某笔记放进线性代数课程组」，或「放进线代课程组的极限文件夹」。',
     };
   }
 
@@ -510,15 +1063,24 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
   const matched = findBestByTitle(groups, groupTitle, (g) => g.title);
   if (!matched) {
     const nice = /课程组$/.test(groupTitle) ? groupTitle : `${groupTitle}课程组`;
-    const folderPart = intent.folderTitle
-      ? `，并放进「${intent.folderTitle}」文件夹`
+    const folderPart = folderTitleAim
+      ? `，并创建文件夹「${folderTitleAim}」`
       : '';
+    const itemLabel =
+      notesToAdd.length > 1
+        ? `${notesToAdd.length} 篇笔记`
+        : notesToAdd[0]
+          ? `笔记「${notesToAdd[0].title || notesToAdd[0].bvid}」`
+          : '当前视频';
+    const videoPart = addVideo ? `，再把${itemLabel}放进去` : '';
     return askConfirm(
-      `还没有「${nice}」。要现在新建并把当前视频放进去${folderPart}吗？回复「好的」或「创建」我就帮你建。`,
+      `还没有「${nice}」。要现在新建${folderPart}${videoPart}吗？回复「好的」或「创建」我就帮你建。`,
       {
-        action: 'create_group_and_add',
+        action: addVideo ? 'create_group_and_add' : 'create_group',
         groupTitle: nice,
-        folderTitle: String(intent.folderTitle || '').trim(),
+        folderTitle: folderTitleAim,
+        noteTitle: noteQuery || '',
+        noteTitles: noteTitlesForConfirm,
         topic: '',
         createFolderIfMissing: true,
         confidence: 1,
@@ -532,14 +1094,54 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
 
   const createFolder =
     forceCreate ||
+    action === 'create_folder' ||
     action === 'create_folder_and_add' ||
     Boolean(intent.createFolderIfMissing);
-  let folderTitle = String(intent.folderTitle || '').trim();
-  if (action === 'create_folder_and_add' && !folderTitle) {
+  let folderTitle = folderTitleAim;
+
+  if (
+    (action === 'create_folder' || action === 'create_folder_and_add') &&
+    !folderTitle
+  ) {
     return {
       handled: true,
       ok: false,
-      message: `要在「${group.title}」里建文件夹的话，请告诉我文件夹名字，例如「创建 USA 文件夹」。`,
+      message: `要在「${group.title}」里建文件夹的话，请告诉我文件夹名字，例如「创建极限文件夹」。`,
+    };
+  }
+
+  // —— 只建文件夹，不放视频 ——
+  if (action === 'create_folder' || (folderTitle && createFolder && !addVideo)) {
+    if (!folderTitle) {
+      return {
+        handled: true,
+        ok: false,
+        message: `请告诉我文件夹名字，例如「在「${group.title}」里创建极限文件夹」。`,
+      };
+    }
+    const folder = resolveOrCreateFolder(group.id, folderTitle, {
+      createIfMissing: true,
+    });
+    if (!folder.ok) {
+      return {
+        handled: true,
+        ok: false,
+        message: `在「${group.title}」里创建文件夹时出了点问题，请稍后再试。`,
+      };
+    }
+    rememberCourse(group, folder.folderTitle, folder.folderId);
+    clearPending();
+    if (folder.created) {
+      return {
+        handled: true,
+        ok: true,
+        message: `好的，已在课程组「${group.title}」下创建文件夹「${folder.folderTitle}」。`,
+      };
+    }
+    return {
+      handled: true,
+      ok: true,
+      message: `课程组「${group.title}」里已经有文件夹「${folder.folderTitle}」了。`,
     };
   }
 
@@ -548,12 +1150,20 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
       createIfMissing: createFolder,
     });
     if (!folder.ok && folder.error === 'folder_not_found') {
+      const itemLabel =
+        notesToAdd.length > 1
+          ? `${notesToAdd.length} 篇笔记`
+          : notesToAdd[0]
+            ? `笔记「${notesToAdd[0].title || notesToAdd[0].bvid}」`
+            : '当前视频';
       return askConfirm(
-        `课程组「${group.title}」里还没有「${folder.folderTitle}」文件夹。要现在创建并把当前视频放进去吗？回复「好的」或「创建」即可。`,
+        `课程组「${group.title}」里还没有「${folder.folderTitle}」文件夹。要现在创建${addVideo ? `并把${itemLabel}放进去` : ''}吗？回复「好的」或「创建」即可。`,
         {
-          action: 'create_folder_and_add',
+          action: addVideo ? 'create_folder_and_add' : 'create_folder',
           groupTitle: group.title,
           folderTitle: folder.folderTitle,
+          noteTitle: noteQuery || '',
+          noteTitles: noteTitlesForConfirm,
           topic: '',
           createFolderIfMissing: true,
           confidence: 1,
@@ -569,51 +1179,82 @@ function executeCourseAction(intent, videoMeta = {}, { forceCreate = false } = {
       };
     }
 
-    const added = ensureItemInGroup(group.id, {
-      bvid: key,
-      title: videoTitle,
-      folderId: folder.folderId,
-    });
-    if (!added.ok) {
+    if (!addVideo) {
+      rememberCourse(group, folder.folderTitle, folder.folderId);
+      clearPending();
       return {
         handled: true,
-        ok: false,
-        message: `没能把当前视频放进「${group.title}」，请稍后再试。`,
+        ok: true,
+        message: folder.created
+          ? `好的，已在课程组「${group.title}」下创建文件夹「${folder.folderTitle}」。`
+          : `课程组「${group.title}」里已经有文件夹「${folder.folderTitle}」了。`,
       };
     }
 
+    const result = addResolvedNotesToGroup(group.id, notesToAdd, folder.folderId);
     rememberCourse(group, folder.folderTitle, folder.folderId);
     clearPending();
     const folderPart = folder.folderId
-      ? `${folder.created ? '新建并放入' : '放入'}文件夹「${folder.folderTitle}」`
-      : '放到未分类';
+      ? `，${folder.created ? '新建并放入' : '放入'}文件夹「${folder.folderTitle}」`
+      : '，放在课程组下';
+    if (!result.ok) {
+      return {
+        handled: true,
+        ok: false,
+        message: formatBatchAddMessage({
+          groupTitle: group.title,
+          folderPart,
+          okNames: result.okNames,
+          failNames: result.failNames,
+          resolveFailures,
+        }) || `没能把笔记放进「${group.title}」，请稍后再试。`,
+      };
+    }
     return {
       handled: true,
       ok: true,
-      message: `好的，已把当前视频加入课程组「${group.title}」，${folderPart}。`,
+      message: formatBatchAddMessage({
+        groupTitle: group.title,
+        folderPart,
+        okNames: result.okNames,
+        failNames: result.failNames,
+        resolveFailures,
+        prefix: '好的',
+      }),
     };
   }
 
-  // 无文件夹：直接加入根目录
-  const added = ensureItemInGroup(group.id, {
-    bvid: key,
-    title: videoTitle,
-    folderId: null,
-  });
-  if (!added.ok) {
+  // 无文件夹：直接加入课程组下
+  {
+    const result = addResolvedNotesToGroup(group.id, notesToAdd, null);
+    rememberCourse(group);
+    clearPending();
+    if (!result.ok) {
+      return {
+        handled: true,
+        ok: false,
+        message: formatBatchAddMessage({
+          groupTitle: group.title,
+          folderPart: '，放在课程组下',
+          okNames: result.okNames,
+          failNames: result.failNames,
+          resolveFailures,
+        }) || `没能把笔记加入「${group.title}」，请稍后再试。`,
+      };
+    }
     return {
       handled: true,
-      ok: false,
-      message: `没能把当前视频加入「${group.title}」，请稍后再试。`,
+      ok: true,
+      message: formatBatchAddMessage({
+        groupTitle: group.title,
+        folderPart: '，放在课程组下',
+        okNames: result.okNames,
+        failNames: result.failNames,
+        resolveFailures,
+        prefix: '好的',
+      }),
     };
   }
-  rememberCourse(group);
-  clearPending();
-  return {
-    handled: true,
-    ok: true,
-    message: `好的，已把当前视频加入课程组「${group.title}」，放到未分类。`,
-  };
 }
 
 function handlePendingConfirm(question, videoMeta) {
@@ -685,7 +1326,7 @@ async function tryHandleCourseChat(question, videoMeta = {}, opts = {}) {
         handled: true,
         ok: false,
         message:
-          '我没太听懂这句课程组指令。可以试试：「新建糖类课程组」「在里面创建USA文件夹并把这个视频放进去」。',
+          '我没太听懂这句课程组指令。可以试试：「新建糖类课程组」「把线性代数、积分笔记放进线代课程组」「把 XX 笔记放进极限文件夹」。',
       };
     }
   }
@@ -696,7 +1337,7 @@ async function tryHandleCourseChat(question, videoMeta = {}, opts = {}) {
         handled: true,
         ok: false,
         message:
-          '我没太确定你的意思。可以说清楚课程组/文件夹名字，例如「把这个视频放到糖类课程组的USA文件夹」，或「新建糖类课程组」。',
+          '我没太确定你的意思。可以说「把某某笔记放进某类课程组」，或「把某某笔记放到某类课程组的某文件夹」，或「新建某类课程组」。',
       };
     }
     return { handled: false };

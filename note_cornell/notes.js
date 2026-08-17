@@ -14,6 +14,13 @@ const sharePanel = document.getElementById('notes-share-panel');
 const shareList = document.getElementById('notes-share-list');
 const shareEmpty = document.getElementById('notes-share-empty');
 const shareCancel = document.getElementById('notes-share-cancel');
+const codeFencePop = document.getElementById('code-fence-pop');
+const codeCaptionEl = document.getElementById('code-caption');
+const codeLangEl = document.getElementById('code-lang');
+const codeFenceOk = document.getElementById('code-fence-ok');
+const codeFenceCancel = document.getElementById('code-fence-cancel');
+/** @type {number | null} */
+let fenceTriggerAt = null;
 
 let currentBvid = null;
 let currentTitle = '';
@@ -127,15 +134,174 @@ async function hydratePreviewImages() {
   );
 }
 
+function enhanceCodeBlocks(root) {
+  if (!root) return;
+  root.querySelectorAll('pre').forEach((pre) => {
+    if (pre.closest('.code-block')) return;
+    const code = pre.querySelector('code');
+    const cls = code?.className || '';
+    const langMatch = cls.match(/language-([\w#+-]+)/i);
+    const lang = langMatch ? langMatch[1] : '';
+
+    let caption = '';
+    const prev = pre.previousElementSibling;
+    if (prev && prev.tagName === 'BLOCKQUOTE') {
+      caption = String(prev.textContent || '').trim();
+      prev.remove();
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'code-block';
+    const head = document.createElement('div');
+    head.className = 'code-block-head';
+    const langEl = document.createElement('span');
+    langEl.className = 'code-block-lang';
+    langEl.textContent = lang || 'text';
+    head.appendChild(langEl);
+    if (caption) {
+      const capEl = document.createElement('span');
+      capEl.className = 'code-block-caption';
+      capEl.textContent = caption;
+      head.appendChild(capEl);
+    }
+    pre.parentNode?.insertBefore(wrap, pre);
+    wrap.appendChild(head);
+    wrap.appendChild(pre);
+  });
+}
+
+/** ```js 介绍 → 引用介绍 + ```js，供预览顶栏显示 */
+function promoteFenceCaptions(md) {
+  const lines = String(md || '').split('\n');
+  const out = [];
+  let inFence = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!inFence && /^```/.test(line)) {
+      const m = line.match(/^```([\w#+.]*)?(?:[ \t]+(.+))?$/);
+      if (m) {
+        const lang = m[1] || '';
+        const caption = String(m[2] || '').trim();
+        if (caption) out.push(`> ${caption}`);
+        out.push('```' + lang);
+        inFence = true;
+        continue;
+      }
+    } else if (inFence && /^```\s*$/.test(line)) {
+      inFence = false;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+function bindTabIndent(textarea, spaces = 2) {
+  if (!textarea) return;
+  const pad = ' '.repeat(Math.max(1, spaces));
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab' || e.isComposing) return;
+    e.preventDefault();
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const val = textarea.value;
+    if (e.shiftKey) {
+      const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+      const block = val.slice(lineStart, end);
+      const next = block.replace(new RegExp(`^ {1,${pad.length}}`, 'gm'), '');
+      textarea.value = val.slice(0, lineStart) + next + val.slice(end);
+      const removed = block.length - next.length;
+      textarea.setSelectionRange(
+        Math.max(lineStart, start - Math.min(pad.length, start - lineStart)),
+        Math.max(lineStart, end - removed)
+      );
+    } else if (start !== end) {
+      const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+      const block = val.slice(lineStart, end);
+      const next = block.replace(/^/gm, pad);
+      textarea.value = val.slice(0, lineStart) + next + val.slice(end);
+      textarea.setSelectionRange(start + pad.length, end + (next.length - block.length));
+    } else {
+      textarea.value = val.slice(0, start) + pad + val.slice(end);
+      const pos = start + pad.length;
+      textarea.setSelectionRange(pos, pos);
+    }
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+function hideFencePop() {
+  fenceTriggerAt = null;
+  if (codeFencePop) codeFencePop.hidden = true;
+}
+
+function positionFencePop() {
+  if (!codeFencePop || !editorEl) return;
+  const rect = editorEl.getBoundingClientRect();
+  const winRect = document.body.getBoundingClientRect();
+  codeFencePop.style.left = Math.max(16, rect.left - winRect.left + 12) + 'px';
+  codeFencePop.style.top = Math.max(16, rect.top - winRect.top + 24) + 'px';
+}
+
+function openFencePop(at) {
+  if (organizing || editorEl?.readOnly) return;
+  fenceTriggerAt = at;
+  if (codeCaptionEl) codeCaptionEl.value = '';
+  if (codeLangEl) codeLangEl.value = 'js';
+  positionFencePop();
+  if (codeFencePop) codeFencePop.hidden = false;
+  setTimeout(() => codeLangEl?.focus(), 0);
+}
+
+function applyFenceMeta({ skipMeta = false } = {}) {
+  if (fenceTriggerAt == null || !editorEl) {
+    hideFencePop();
+    return;
+  }
+  const at = fenceTriggerAt;
+  const val = editorEl.value;
+  if (val.slice(at, at + 3) !== '```') {
+    hideFencePop();
+    return;
+  }
+  let open = '```';
+  if (!skipMeta) {
+    const lang = String(codeLangEl?.value || '').trim();
+    const caption = String(codeCaptionEl?.value || '').trim();
+    open = '```' + [lang, caption].filter(Boolean).join(' ');
+  }
+  const replacement = open + '\n\n```';
+  editorEl.value = val.slice(0, at) + replacement + val.slice(at + 3);
+  const cursor = at + open.length + 1;
+  hideFencePop();
+  editorEl.focus();
+  editorEl.setSelectionRange(cursor, cursor);
+  dirty = true;
+  schedulePreview();
+  scheduleSave();
+}
+
+function maybeOpenFenceFromInput() {
+  if (!editorEl || organizing || editorEl.readOnly) return;
+  if (codeFencePop && !codeFencePop.hidden) return;
+  const pos = editorEl.selectionStart ?? 0;
+  const before = editorEl.value.slice(0, pos);
+  if (!/(^|\n)```$/.test(before)) return;
+  const after = editorEl.value.slice(pos);
+  // 已在写语言/介绍，或已有闭合内容时不弹
+  if (/^[\w#+. \t]/.test(after)) return;
+  openFencePop(pos - 3);
+}
+
 function renderMarkdown(md, { withMath = true } = {}) {
   if (!previewEl) return;
-  const source = rewriteLegacyAssetUrls(md);
+  const source = promoteFenceCaptions(rewriteLegacyAssetUrls(md));
   clearTimeout(mathTimer);
   mathTimer = null;
   try {
     if (window.marked?.parse) {
       const raw = window.marked.parse(source, { gfm: true, breaks: true });
       previewEl.innerHTML = applyCachedAssetSrc(sanitizeHtml(raw));
+      enhanceCodeBlocks(previewEl);
     } else {
       previewEl.textContent = source;
     }
@@ -399,6 +565,20 @@ function insertAtCursor(text) {
   scheduleSave();
 }
 
+codeFenceOk?.addEventListener('click', () => applyFenceMeta());
+codeFenceCancel?.addEventListener('click', () => applyFenceMeta({ skipMeta: true }));
+codeFencePop?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target && e.target.tagName !== 'BUTTON') {
+    e.preventDefault();
+    applyFenceMeta();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    applyFenceMeta({ skipMeta: true });
+  }
+});
+
+bindTabIndent(editorEl, 2);
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -558,6 +738,7 @@ async function openSharePanel() {
     setStatus('尚无视频笔记，无法传给好友');
     return;
   }
+  hideFencePop();
   await flushSave();
   const body = String(editorEl?.value || '').trim();
   if (!body) {
@@ -613,6 +794,7 @@ shareCancel?.addEventListener('click', () => {
 editorEl?.addEventListener('input', () => {
   if (applyingRemote || organizing) return;
   dirty = true;
+  maybeOpenFenceFromInput();
   schedulePreview();
   scheduleSave();
 });

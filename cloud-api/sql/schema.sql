@@ -102,6 +102,37 @@ CREATE TABLE IF NOT EXISTS study_days (
   KEY idx_study_sync (uid, sync_rev)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS note_assets (
+  uid VARCHAR(32) NOT NULL,
+  bvid VARCHAR(64) NOT NULL,
+  filename VARCHAR(191) NOT NULL,
+  mime VARCHAR(64) NOT NULL DEFAULT 'image/png',
+  bytes LONGBLOB NOT NULL,
+  updated_at BIGINT NOT NULL,
+  sync_rev BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (uid, bvid, filename),
+  KEY idx_assets_sync (uid, sync_rev)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Soft-deleted notes (recycle bin)
+CREATE TABLE IF NOT EXISTS note_trash (
+  uid VARCHAR(32) NOT NULL,
+  bvid VARCHAR(64) NOT NULL,
+  notes_json MEDIUMTEXT NOT NULL,
+  video_title VARCHAR(512) NULL,
+  session_id VARCHAR(128) NULL,
+  updated_at BIGINT NOT NULL,
+  created_at BIGINT NULL,
+  mode VARCHAR(16) NOT NULL DEFAULT 'user',
+  body_md MEDIUMTEXT NOT NULL,
+  revision INT NOT NULL DEFAULT 0,
+  deleted_at BIGINT NOT NULL,
+  sync_rev BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (uid, bvid),
+  KEY idx_trash_sync (uid, sync_rev),
+  KEY idx_trash_deleted (uid, deleted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Friends + mutual otter-petting
 CREATE TABLE IF NOT EXISTS friend_invites (
   host_uid VARCHAR(32) NOT NULL,

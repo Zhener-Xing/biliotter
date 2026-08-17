@@ -12,10 +12,11 @@ const {
   setActiveUid,
   getActiveUid,
   localDbExists,
-  hasLocalKbData,
   dbPathForUid,
   listUidDbFilesOnDisk,
   markAllCourseStructurePending,
+  relinkOrphanNoteAssets,
+  markAllNoteAssetsPending,
 } = require('./notes-db');
 const { setAccountOpsReady, isAccountOpsReady, setForeignPurgeActive } = require('./session-gate');
 const { getBiliCookieHeader } = require('./bili-web-api');
@@ -27,7 +28,8 @@ function tokenFile() {
 const PULL_INTERVAL_MS = 30_000;
 const PUSH_DEBOUNCE_MS = 1500;
 const QUIT_PUSH_TIMEOUT_MS = 12_000;
-const FIRST_PULL_TIMEOUT_MS = 5_000;
+/** 首拉含笔记附件时很容易超过 5s；过短会导致超时→重试→误判本地空库已就绪 */
+const FIRST_PULL_TIMEOUT_MS = 60_000;
 const PURGE_RETRY_MIN_MS = 3_000;
 const PURGE_RETRY_MAX_MS = 60_000;
 const FIRST_PULL_RETRY_MS = 4_000;
@@ -45,6 +47,26 @@ let dbMutex = Promise.resolve();
 const purgeJobs = new Map();
 /** @type {Map<string, NodeJS.Timeout>} */
 const firstPullRetryTimers = new Map();
+/** 本进程已为该 uid 发出过「首拉完成」庆祝事件，避免反复播报 */
+const celebratedFirstPullUids = new Set();
+
+function markFirstPullCelebrated(uid) {
+  const id = String(uid || '').trim();
+  if (id) celebratedFirstPullUids.add(id);
+}
+
+function clearFirstPullCelebrated(uid = null) {
+  const id = String(uid || '').trim();
+  if (id) celebratedFirstPullUids.delete(id);
+  else celebratedFirstPullUids.clear();
+}
+
+function shouldCelebrateFirstPull(uid, { pulled = false, fromLocal = false } = {}) {
+  const id = String(uid || '').trim();
+  if (!id || fromLocal || !pulled) return false;
+  if (celebratedFirstPullUids.has(id)) return false;
+  return true;
+}
 
 function apiBase() {
   return String(process.env.CLOUD_API_BASE || '')
@@ -365,7 +387,9 @@ async function pushPending({ reason = 'manual', tokenSession = null } = {}) {
       !changes.studyDays.length &&
       !changes.courseGroups.length &&
       !changes.courseFolders.length &&
-      !changes.courseItems.length;
+      !changes.courseItems.length &&
+      !(Array.isArray(changes.assets) && changes.assets.length) &&
+      !(Array.isArray(changes.trashNotes) && changes.trashNotes.length);
     if (empty) {
       clearPending(pending);
       emitSyncState('ready', { reason: 'push_empty_cleared' });
@@ -414,8 +438,25 @@ async function pullChanges({ reason = 'timer', timeoutMs = 0 } = {}) {
     return { ok: false, error: 'token_uid_mismatch' };
   }
 
+  // 先把本地删除/分类推上去，再拉云端，避免旧副本盖掉本地
+  if (hasPendingSync()) {
+    if (pushing) {
+      emitSyncState('pull_skipped', { reason: 'push_in_flight' });
+      return { ok: true, skipped: true, reason: 'push_in_flight' };
+    }
+    const flushed = await pushPending({ reason: `${reason}_before_pull` });
+    if (!flushed.ok && !flushed.skipped) {
+      emitSyncState('pull_skipped', {
+        reason: 'pending_unpushed',
+        error: flushed.error,
+      });
+      return { ok: true, skipped: true, reason: 'pending_unpushed' };
+    }
+  }
+
   pulling = true;
-  emitSyncState('pulling', { reason });
+  const isBackground = /timer|periodic|bg_/i.test(String(reason || ''));
+  emitSyncState('pulling', { reason, background: isBackground });
   try {
     const since = getCloudRevision();
     const data = await apiFetch(`/kb/changes?since=${encodeURIComponent(since)}`, {
@@ -429,6 +470,8 @@ async function pullChanges({ reason = 'timer', timeoutMs = 0 } = {}) {
       reason: 'pull_ok',
       revision: data?.revision,
       applied: applied.applied,
+      background: isBackground,
+      dataPullDone: false,
     });
     return { ok: true, revision: data?.revision, applied: applied.applied };
   } catch (err) {
@@ -443,54 +486,15 @@ async function pullChanges({ reason = 'timer', timeoutMs = 0 } = {}) {
   }
 }
 
-async function probeNeedsPull(uid, { bindingChanged = false, localWasMissing = false } = {}) {
+async function probeNeedsPull(uid, { localWasMissing = false } = {}) {
   if (!cloudEnabled()) {
     return { need: false, reason: 'local_only' };
   }
-  if (bindingChanged) return { need: true, reason: 'binding_changed' };
-  if (localWasMissing || !localDbExists(uid)) {
-    return { need: true, reason: 'local_cleared' };
+  // 登录前本地已有该 uid 库：直接用本地，不探云端 revision、不拉 changes
+  if (!localWasMissing && localDbExists(uid)) {
+    return { need: false, reason: 'local_sqlite_hit' };
   }
-
-  let localHasData = false;
-  let localRev = 0;
-  try {
-    if (getActiveUid() === String(uid)) {
-      localHasData = hasLocalKbData();
-      localRev = getCloudRevision();
-    }
-  } catch {
-    localHasData = false;
-  }
-  if (!localHasData && localRev <= 0) {
-    return { need: true, reason: 'local_cleared' };
-  }
-
-  const session = loadTokenForUid(uid) || loadToken();
-  if (!session?.token || session.uid !== String(uid)) {
-    return { need: true, reason: 'no_token' };
-  }
-
-  try {
-    const data = await apiFetch('/kb/revision', {
-      method: 'GET',
-      token: session.token,
-      timeoutMs: Math.min(2000, FIRST_PULL_TIMEOUT_MS),
-    });
-    const remoteRev = Math.max(0, Number(data?.revision) || 0);
-    if (remoteRev > localRev) {
-      return { need: true, reason: 'revision_behind', remoteRev, localRev };
-    }
-    return { need: false, reason: 'up_to_date', remoteRev, localRev };
-  } catch (err) {
-    const status = Number(err?.status) || 0;
-    const msg = err.message || String(err);
-    // 远端尚未部署 /kb/revision：不要卡死，走增量 changes（本地已有数据时也很快）
-    if (status === 404 || /http_404|Cannot GET \/kb\/revision/i.test(msg)) {
-      return { need: true, reason: 'revision_endpoint_missing', localRev };
-    }
-    return { need: true, reason: 'probe_failed', error: msg };
-  }
+  return { need: true, reason: 'local_cleared' };
 }
 
 function clearFirstPullRetry(uid) {
@@ -519,14 +523,23 @@ function scheduleFirstPullRetry(uid, cookieHeader = null) {
     if (getActiveUid() !== id) return;
     void (async () => {
       emitSyncState('syncing_login', { uid: id, reason: 'first_pull_retry', opsReady: false });
+      // 必须继续按「本地曾缺失」拉云端：setActiveUid 已建空库时若不当成 missing，会误判 local_sqlite_hit
       const result = await runFirstPullGate({
         uid: id,
         cookieHeader: resolveCookieHeader(cookieHeader),
+        localWasMissing: true,
         pullReason: 'login_pull_retry',
       });
       if (getActiveUid() !== id) return;
       if (result.ok) {
         setAccountOpsReady(true);
+        const fromLocal =
+          result.reason === 'local_sqlite_hit' || result.reason === 'local_only';
+        const celebrate = shouldCelebrateFirstPull(id, {
+          pulled: Boolean(result.pulled),
+          fromLocal,
+        });
+        if (celebrate) markFirstPullCelebrated(id);
         emitSyncState('ready', {
           reason: result.pulled ? 'pull_ok' : result.reason || 'bg_sync_ok',
           uid: id,
@@ -534,6 +547,8 @@ function scheduleFirstPullRetry(uid, cookieHeader = null) {
           opsReady: true,
           dataPullDone: true,
           pulled: Boolean(result.pulled),
+          fromLocal,
+          celebrate,
         });
       } else {
         setAccountOpsReady(false);
@@ -563,6 +578,19 @@ async function runFirstPullGate({
   const stale = () => (typeof isStale === 'function' ? isStale() : false);
   const cookie = resolveCookieHeader(cookieHeader);
 
+  const decision = await probeNeedsPull(id, { localWasMissing });
+  if (stale()) return { ok: false, error: 'stale' };
+
+  if (!decision.need) {
+    emitSyncState('ready', {
+      reason: decision.reason,
+      uid: id,
+      fromLocal: decision.reason === 'local_sqlite_hit' || decision.reason === 'local_only',
+    });
+    clearFirstPullRetry(id);
+    return { ok: true, uid: id, pulled: false, reason: decision.reason };
+  }
+
   if (cookie && cloudEnabled()) {
     const auth = await authenticateWithCookie(cookie);
     if (stale()) return { ok: false, error: 'stale' };
@@ -580,15 +608,6 @@ async function runFirstPullGate({
     if (!device.ok && !loadTokenForUid(id)?.token) {
       return { ok: false, error: device.error || 'waiting_auth' };
     }
-  }
-
-  const decision = await probeNeedsPull(id, { bindingChanged, localWasMissing });
-  if (stale()) return { ok: false, error: 'stale' };
-
-  if (!decision.need) {
-    emitSyncState('ready', { reason: decision.reason, uid: id });
-    clearFirstPullRetry(id);
-    return { ok: true, uid: id, pulled: false, reason: decision.reason };
   }
 
   const session = loadTokenForUid(id) || loadToken();
@@ -792,27 +811,25 @@ async function onAccountReady({
   autoBound = false,
   prevUid = null,
   isStale = null,
+  localWasMissing: localWasMissingArg = null,
 } = {}) {
   const id = String(uid || '').trim();
   if (!id) return { ok: false, error: 'no_uid' };
   const stale = () => (typeof isStale === 'function' ? isStale() : false);
 
-  emitSyncState(switched ? 'switching' : 'syncing_login', {
-    prevUid: prevUid || null,
-    uid: id,
-    opsReady: false,
-  });
-
   if (switched && prevUid) {
     const prev = String(prevUid).trim();
     if (prev && prev !== id) {
+      clearFirstPullCelebrated(prev);
       scheduleBackgroundPurge(prev, 'switch_push_old');
     }
   }
 
   if (stale()) return { ok: false, error: 'stale' };
 
-  const localWasMissing = !localDbExists(id);
+  // 必须在 setActiveUid 建库之前判定；调用方若已挂载，应传入挂载前的结果
+  const localWasMissing =
+    typeof localWasMissingArg === 'boolean' ? localWasMissingArg : !localDbExists(id);
   cancelBackgroundPurge(id);
 
   const existing = loadToken();
@@ -824,14 +841,16 @@ async function onAccountReady({
     }
   }
 
-  // 先挂本地库
   setActiveUid(id);
-  // 本机已有该 uid 的 SQLite：先放行知识库，云端增量后台拉
-  // 本地库不存在（退出/切号 purge 后）：必须等云端首拉，避免打开空库
-  const canUseLocalSqlite = !localWasMissing && localDbExists(id);
+  try {
+    relinkOrphanNoteAssets();
+  } catch {
+    /* ignore */
+  }
+  const canUseLocalSqlite = !localWasMissing;
   if (canUseLocalSqlite) {
     setAccountOpsReady(true);
-    console.log(`[bili-pet] local db hit uid=${id} (ops ready; cloud pull in background)`);
+    console.log(`[bili-pet] local db hit uid=${id} (use local; skip cloud login pull)`);
     emitSyncState('local_ready', {
       uid: id,
       prevUid: prevUid || null,
@@ -842,6 +861,11 @@ async function onAccountReady({
   } else {
     setAccountOpsReady(false);
     console.log(`[bili-pet] local db missing uid=${id} (waiting cloud first pull)`);
+    emitSyncState(switched ? 'switching' : 'syncing_login', {
+      prevUid: prevUid || null,
+      uid: id,
+      opsReady: false,
+    });
     emitSyncState('local_ready', {
       uid: id,
       prevUid: prevUid || null,
@@ -851,72 +875,35 @@ async function onAccountReady({
   }
   if (stale()) return { ok: false, error: 'stale' };
 
-  if (!cloudEnabled()) {
+  if (!cloudEnabled() || canUseLocalSqlite) {
     setAccountOpsReady(true);
     emitSyncState('ready', {
-      reason: 'local_only',
+      reason: canUseLocalSqlite ? 'local_sqlite_hit' : 'local_only',
       uid: id,
       opsReady: true,
       dataPullDone: true,
       pulled: false,
       fromLocal: true,
+      celebrate: false,
     });
-    return { ok: true, uid: id, opsReady: true, pulled: false };
+    if (cloudEnabled() && canUseLocalSqlite) {
+      // 登录知识库走本地；把本地删除/课程分类推上云端，避免稍后 pull 用旧副本覆盖
+      void ensureCloudAuth({ uid: id, cookieHeader }).then((auth) => {
+        if (stale() || getActiveUid() !== id || !auth?.ok) return;
+        try {
+          markAllCourseStructurePending();
+          markAllNoteAssetsPending();
+          schedulePush('post_login_local_truth');
+        } catch {
+          /* ignore */
+        }
+      });
+    }
+    return { ok: true, uid: id, opsReady: true, pulled: false, fromLocal: true, celebrate: false };
   }
 
   const bindingChanged = Boolean(switched || autoBound);
   const pullReason = switched ? 'switch_pull' : 'login_pull';
-
-  if (canUseLocalSqlite) {
-    // 立刻可用本地库；云端同步不挡打开
-    emitSyncState('ready', {
-      reason: 'local_sqlite_hit',
-      uid: id,
-      opsReady: true,
-      dataPullDone: true,
-      pulled: false,
-      fromLocal: true,
-    });
-    void (async () => {
-      const gate = await runFirstPullGate({
-        uid: id,
-        cookieHeader,
-        bindingChanged,
-        localWasMissing: false,
-        pullReason,
-        isStale,
-      });
-      if (stale() || getActiveUid() !== id) return;
-      if (!gate.ok) {
-        scheduleFirstPullRetry(id, cookieHeader);
-        emitSyncState('first_pull_blocked', {
-          uid: id,
-          error: gate.error,
-          reason: gate.reason || gate.error,
-          opsReady: true,
-          background: true,
-        });
-        return;
-      }
-      try {
-        markAllCourseStructurePending();
-        schedulePush('post_login_course_backfill');
-      } catch {
-        /* ignore */
-      }
-      if (gate.pulled) {
-        emitSyncState('ready', {
-          reason: 'pull_ok',
-          uid: id,
-          pulled: true,
-          opsReady: true,
-          dataPullDone: true,
-          background: true,
-        });
-      }
-    })();
-    return { ok: true, uid: id, opsReady: true, pulled: false, fromLocal: true };
-  }
 
   const gate = await runFirstPullGate({
     uid: id,
@@ -947,24 +934,42 @@ async function onAccountReady({
 
   setAccountOpsReady(true);
   try {
+    relinkOrphanNoteAssets();
     markAllCourseStructurePending();
+    markAllNoteAssetsPending();
     schedulePush('post_login_course_backfill');
   } catch {
     /* ignore */
   }
+  const celebrate = shouldCelebrateFirstPull(id, {
+    pulled: Boolean(gate.pulled),
+    fromLocal: false,
+  });
+  if (celebrate) markFirstPullCelebrated(id);
   emitSyncState('ready', {
     reason: gate.pulled ? 'pull_ok' : gate.reason || 'bg_sync_ok',
     uid: id,
     pulled: Boolean(gate.pulled),
     opsReady: true,
     dataPullDone: true,
+    celebrate,
   });
   return {
     ok: true,
     uid: id,
     opsReady: true,
     pulled: Boolean(gate.pulled),
+    celebrate,
   };
+}
+
+async function runPeriodicSync() {
+  if (!cloudEnabled() || !isAccountOpsReady()) return;
+  if (hasPendingSync() && !pushing) {
+    const flushed = await pushPending({ reason: 'timer_30s_push' });
+    if (!flushed.ok && !flushed.skipped) return;
+  }
+  await pullChanges({ reason: 'timer_30s_pull' });
 }
 
 function startCloudSync({ onBroadcast } = {}) {
@@ -979,11 +984,12 @@ function startCloudSync({ onBroadcast } = {}) {
 
   if (cloudEnabled()) {
     pullTimer = setInterval(() => {
-      if (!isAccountOpsReady()) return;
-      void pullChanges({ reason: 'timer_30s' });
+      void runPeriodicSync();
     }, PULL_INTERVAL_MS);
     if (typeof pullTimer.unref === 'function') pullTimer.unref();
-    console.log(`[bili-pet] cloud sync enabled → ${apiBase()} (pull every ${PULL_INTERVAL_MS}ms)`);
+    console.log(
+      `[bili-pet] cloud sync enabled → ${apiBase()} (push+pull every ${PULL_INTERVAL_MS}ms)`
+    );
   } else {
     console.log('[bili-pet] cloud sync disabled (set CLOUD_API_BASE to enable)');
   }
@@ -1074,6 +1080,8 @@ module.exports = {
   scheduleFirstPullRetry,
   sweepOrphanLocalStores,
   runFirstPullGate,
+  clearFirstPullCelebrated,
+  markFirstPullCelebrated,
   apiFetch,
   apiBase,
 };

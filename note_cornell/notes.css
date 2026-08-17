@@ -361,9 +361,46 @@ body {
   padding: 0.05em 0.3em;
 }
 
+.md-body .code-block {
+  margin: 0 0 1em;
+  border: 3px solid #3b2a1f;
+  box-shadow: 3px 3px 0 #3b2a1f;
+  background: #fff8f0;
+  overflow: hidden;
+}
+
+.md-body .code-block-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  background: #e7d7c4;
+  border-bottom: 2px solid #3b2a1f;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+.md-body .code-block-lang {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8f5e32;
+}
+
+.md-body .code-block-caption {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #7a6352;
+}
+
+.md-body .code-block pre,
 .md-body pre {
-  background: #2c2118;
-  color: #f4ebe0;
+  background: #faf4ec;
+  color: #3b2a1f;
   border: 3px solid #3b2a1f;
   box-shadow: 3px 3px 0 #3b2a1f;
   padding: 12px 14px;
@@ -371,13 +408,75 @@ body {
   margin: 0 0 1em;
 }
 
-.md-body pre code {
+.md-body .code-block pre {
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.md-body pre code,
+.md-body .code-block pre code {
   background: transparent;
   border: 0;
   padding: 0;
   color: inherit;
   font-size: 12px;
   line-height: 1.55;
+  white-space: pre;
+}
+
+.code-fence-pop {
+  position: absolute;
+  z-index: 30;
+  left: 24px;
+  top: 120px;
+  width: min(320px, calc(100% - 48px));
+  padding: 12px;
+  border: 3px solid #3b2a1f;
+  background: #fff8f0;
+  box-shadow: 4px 4px 0 #3b2a1f;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.code-fence-pop[hidden] {
+  display: none !important;
+}
+
+.code-fence-pop-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #3b2a1f;
+  margin: 0;
+}
+
+.code-fence-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #7a6352;
+}
+
+.code-fence-field input,
+.code-fence-field select {
+  width: 100%;
+  border: 3px solid #3b2a1f;
+  background: #faf4ec;
+  color: #3b2a1f;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.code-fence-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .md-body img {

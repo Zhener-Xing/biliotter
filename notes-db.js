@@ -13,6 +13,69 @@ function getAssetsDir() {
   return dataPath('notes-assets');
 }
 
+/** Packaged BiliOtter keeps screenshots in userData; `npm start` uses the repo. */
+function packagedUserNotesAssetsDir() {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (!home) return '';
+  if (process.platform === 'darwin') {
+    return path.join(home, 'Library', 'Application Support', 'BiliOtter', 'notes-assets');
+  }
+  if (process.platform === 'win32') {
+    return path.join(home, 'AppData', 'Roaming', 'BiliOtter', 'notes-assets');
+  }
+  return path.join(home, '.config', 'BiliOtter', 'notes-assets');
+}
+
+function listAssetRoots() {
+  const seen = new Set();
+  const roots = [];
+  const add = (dir) => {
+    const n = path.normalize(String(dir || ''));
+    if (!n || seen.has(n)) return;
+    seen.add(n);
+    roots.push(n);
+  };
+  add(getAssetsDir());
+  try {
+    const electron = require('electron');
+    const app = electron && (electron.app || (electron.remote && electron.remote.app));
+    if (app && typeof app.getPath === 'function') {
+      add(path.join(app.getPath('userData'), 'notes-assets'));
+    }
+  } catch {
+    /* scripts / tests without electron */
+  }
+  add(packagedUserNotesAssetsDir());
+  return roots;
+}
+
+function resolveNoteAssetFile(folderKey, filename) {
+  const key = String(folderKey || '').trim();
+  const name = String(filename || '').trim();
+  if (!key || !name) return null;
+  if (
+    key.includes('..') ||
+    name.includes('..') ||
+    key.includes('/') ||
+    key.includes('\\') ||
+    name.includes('/') ||
+    name.includes('\\')
+  ) {
+    return null;
+  }
+  for (const assetsRoot of listAssetRoots()) {
+    const full = path.normalize(path.join(assetsRoot, key, name));
+    const root = path.normalize(assetsRoot + path.sep);
+    if (!full.startsWith(root)) continue;
+    try {
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) return full;
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 const MODES = new Set(['ai', 'user', 'collab']);
 
 let db = null;
@@ -148,14 +211,16 @@ function removeNoteAssetsForBvids(bvids) {
   for (const bvid of bvids || []) {
     const key = safeAssetKey(bvid);
     if (!key) continue;
-    const dir = path.join(getAssetsDir(), key);
-    try {
-      if (fs.existsSync(dir)) {
-        fs.rmSync(dir, { recursive: true, force: true });
-        removed.push(dir);
+    for (const assetsRoot of listAssetRoots()) {
+      const dir = path.join(assetsRoot, key);
+      try {
+        if (fs.existsSync(dir)) {
+          fs.rmSync(dir, { recursive: true, force: true });
+          removed.push(dir);
+        }
+      } catch (err) {
+        console.warn('[bili-pet] asset purge failed:', dir, err.message || err);
       }
-    } catch (err) {
-      console.warn('[bili-pet] asset purge failed:', dir, err.message || err);
     }
   }
   return removed;
@@ -346,7 +411,15 @@ function listTombstones() {
 }
 
 function getDb() {
-  if (db) return db;
+  if (db) {
+    // 长驻进程热更新后也要补建新表，否则废纸篓插入失败/列表一直空
+    try {
+      ensureTrashTables(db);
+    } catch (err) {
+      console.warn('[bili-pet] ensureTrashTables failed:', err.message || err);
+    }
+    return db;
+  }
   if (!normalizeUid(activeUid)) {
     throw new Error('no_active_uid');
   }
@@ -373,12 +446,38 @@ function getDb() {
   ensureCourseGroupTables(db);
   ensureStudyActivityTables(db);
   ensureSyncTables(db);
-  ensureQuizBankTables(db);
+  ensureTrashTables(db);
   migrateLegacyBufferOnce(db);
   backfillBodyMd(db);
   backfillAllChunksIfEmpty(db);
+  try {
+    purgeExpiredTrash(db);
+  } catch (err) {
+    console.warn('[bili-pet] trash purge skipped:', err.message || err);
+  }
   return db;
 }//切块
+
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function ensureTrashTables(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS note_trash (
+      bvid TEXT PRIMARY KEY NOT NULL,
+      notes_json TEXT NOT NULL DEFAULT '{}',
+      video_title TEXT,
+      session_id TEXT,
+      updated_at INTEGER NOT NULL,
+      created_at INTEGER,
+      mode TEXT NOT NULL DEFAULT 'user',
+      body_md TEXT NOT NULL DEFAULT '',
+      revision INTEGER NOT NULL DEFAULT 0,
+      deleted_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_note_trash_deleted
+      ON note_trash(deleted_at);
+  `);
+}
 
 function ensureStudyActivityTables(database) {
   database.exec(`
@@ -390,224 +489,6 @@ function ensureStudyActivityTables(database) {
       updated_at INTEGER NOT NULL
     );
   `);
-}
-
-/** 本地答题题库（不进云同步；随 uid 分库） */
-function ensureQuizBankTables(database) {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS quiz_bank (
-      id TEXT PRIMARY KEY NOT NULL,
-      bvid TEXT NOT NULL,
-      q TEXT NOT NULL,
-      choices_json TEXT NOT NULL,
-      answer INTEGER NOT NULL,
-      explain_text TEXT NOT NULL DEFAULT '',
-      source_rev INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      used_at INTEGER
-    );
-    CREATE INDEX IF NOT EXISTS idx_quiz_bank_bvid
-      ON quiz_bank(bvid, used_at, created_at);
-  `);
-}
-
-function makeQuizBankId() {
-  return `qb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function countQuizBankForBvid(bvid) {
-  const key = String(bvid || '').trim();
-  if (!key) return 0;
-  try {
-    const row = getDb()
-      .prepare('SELECT COUNT(*) AS c FROM quiz_bank WHERE bvid = ?')
-      .get(key);
-    return Number(row?.c) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function getQuizBankMetaForBvid(bvid) {
-  const key = String(bvid || '').trim();
-  if (!key) return { count: 0, maxSourceRev: 0 };
-  try {
-    const row = getDb()
-      .prepare(
-        `SELECT COUNT(*) AS c, COALESCE(MAX(source_rev), 0) AS maxRev
-         FROM quiz_bank WHERE bvid = ?`
-      )
-      .get(key);
-    return {
-      count: Number(row?.c) || 0,
-      maxSourceRev: Number(row?.maxRev) || 0,
-    };
-  } catch {
-    return { count: 0, maxSourceRev: 0 };
-  }
-}
-
-function saveQuizBankQuestions(bvid, questions, { sourceRev = 0 } = {}) {
-  const key = String(bvid || '').trim();
-  if (!key || !Array.isArray(questions) || !questions.length) {
-    return { ok: false, saved: 0 };
-  }
-  const now = Date.now();
-  const rev = Number(sourceRev) || 0;
-  let saved = 0;
-  try {
-    const database = getDb();
-    const ins = database.prepare(
-      `
-      INSERT INTO quiz_bank
-        (id, bvid, q, choices_json, answer, explain_text, source_rev, created_at, used_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-    `
-    );
-    const existingQs = new Set(
-      database
-        .prepare('SELECT q FROM quiz_bank WHERE bvid = ?')
-        .all(key)
-        .map((r) => String(r.q || '').trim())
-    );
-    withTransaction(database, () => {
-      for (const item of questions) {
-        const q = String(item?.q || '').trim();
-        if (!q || existingQs.has(q)) continue;
-        let choices = Array.isArray(item.choices)
-          ? item.choices.map((c) => String(c || '').trim())
-          : [];
-        if (choices.length > 4) choices = choices.slice(0, 4);
-        while (choices.length < 4) choices.push(`选项${choices.length + 1}`);
-        if (choices.some((c) => !c)) continue;
-        let answer = Number(item.answer);
-        if (!Number.isInteger(answer) || answer < 0 || answer > 3) continue;
-        ins.run(
-          makeQuizBankId(),
-          key,
-          q,
-          JSON.stringify(choices),
-          answer,
-          String(item.explain || '').trim(),
-          rev,
-          now
-        );
-        existingQs.add(q);
-        saved += 1;
-      }
-    });
-    return { ok: true, saved };
-  } catch (err) {
-    console.warn('[bili-pet] saveQuizBankQuestions failed:', err?.message || err);
-    return { ok: false, saved, error: err?.message || String(err) };
-  }
-}
-
-/**
- * 从题库取题（优先未用过的）。返回 GameQuestion 形态。
- * @param {string[]} bvids
- * @param {{ limit?: number, markUsed?: boolean }} [opts]
- */
-function takeQuizBankQuestions(bvids, { limit = 5, markUsed = true } = {}) {
-  const ids = [
-    ...new Set(
-      (Array.isArray(bvids) ? bvids : [])
-        .map((b) => String(b || '').trim())
-        .filter(Boolean)
-    ),
-  ];
-  const n = Math.max(1, Math.min(20, Number(limit) || 5));
-  if (!ids.length) return [];
-  try {
-    const database = getDb();
-    const ph = ids.map(() => '?').join(',');
-    const rows = database
-      .prepare(
-        `
-        SELECT id, bvid, q, choices_json AS choicesJson, answer, explain_text AS explainText
-        FROM quiz_bank
-        WHERE bvid IN (${ph})
-        ORDER BY CASE WHEN used_at IS NULL THEN 0 ELSE 1 END,
-                 created_at DESC
-        LIMIT ?
-      `
-      )
-      .all(...ids, n);
-
-    const now = Date.now();
-    const out = [];
-    const mark = database.prepare(
-      'UPDATE quiz_bank SET used_at = ? WHERE id = ?'
-    );
-    for (const row of rows) {
-      let choices = [];
-      try {
-        choices = JSON.parse(String(row.choicesJson || '[]'));
-      } catch {
-        choices = [];
-      }
-      if (!Array.isArray(choices) || choices.length < 4) continue;
-      const answer = Number(row.answer);
-      if (!Number.isInteger(answer) || answer < 0 || answer > 3) continue;
-      const q = String(row.q || '').trim();
-      if (!q) continue;
-      out.push({
-        q,
-        choices: choices.slice(0, 4).map((c) => String(c || '').trim()),
-        answer,
-        explain: String(row.explainText || '').trim(),
-        sourceBvid: String(row.bvid || '').trim(),
-        bankId: row.id,
-      });
-      if (markUsed) {
-        try {
-          mark.run(now, row.id);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    return out;
-  } catch (err) {
-    console.warn('[bili-pet] takeQuizBankQuestions failed:', err?.message || err);
-    return [];
-  }
-}
-
-function deleteQuizBankForBvid(bvid) {
-  const key = String(bvid || '').trim();
-  if (!key) return { ok: false };
-  try {
-    const info = getDb().prepare('DELETE FROM quiz_bank WHERE bvid = ?').run(key);
-    return { ok: true, deleted: info.changes || 0 };
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err) };
-  }
-}
-
-/**
- * 笔记是否「够成熟」可后台出题。
- * @returns {{ ok: boolean, score: number, reason?: string }}
- */
-function assessNoteQuizMaturity(doc) {
-  if (!doc) return { ok: false, score: 0, reason: 'no_doc' };
-  const body = String(doc.bodyMd || '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const notes = doc.notes && typeof doc.notes === 'object' ? doc.notes : null;
-  let score = 0;
-  score += Math.min(40, Math.floor(body.length / 18));
-  const bullets = Array.isArray(notes?.notes) ? notes.notes : [];
-  score += Math.min(30, bullets.length * 6);
-  if (String(notes?.summary || '').trim()) score += 15;
-  const cues = Array.isArray(notes?.cues) ? notes.cues : [];
-  score += Math.min(15, cues.length * 3);
-  if (/##\s*要点/.test(String(doc.bodyMd || ''))) score += 10;
-  if (/##\s*总结/.test(String(doc.bodyMd || ''))) score += 8;
-  // 约：正文 ≥ ~360 字，或若干要点 + 总结
-  if (score < 48) return { ok: false, score, reason: 'too_thin' };
-  return { ok: true, score };
 }
 
 function dayKeyFromTs(ts = Date.now()) {
@@ -627,11 +508,11 @@ function ensureStudyDayRow(database, day, now = Date.now()) {
     .run(day, now);
 }
 
-function markPending(entityType, entityKey) {
+function markPending(entityType, entityKey, { force = false } = {}) {
   const type = String(entityType || '').trim();
   const key = String(entityKey || '').trim();
   if (!type || !key) return;
-  if (suppressWriteHook > 0) return;
+  if (suppressWriteHook > 0 && !force) return;
   try {
     getDb()
       .prepare(
@@ -744,6 +625,48 @@ function buildPendingPushPayload() {
   const seenFolders = new Set();
   const seenItems = new Set();
 
+  const seenAssets = new Set();
+  const assets = [];
+  const trashNotes = [];
+  const seenTrash = new Set();
+  let assetBytes = 0;
+
+  const packedOrGone = new Set();
+  const packAsset = (bvid, filename) => {
+    const key = safeAssetKey(bvid);
+    const name = safeAssetFilename(filename);
+    const assetKey = `${key}::${name}`;
+    if (!key || !name || seenAssets.has(assetKey)) return false;
+    const packed = readAssetForPush(bvid, name);
+    if (!packed) {
+      packedOrGone.add(assetKey);
+      return false;
+    }
+    const size = Buffer.byteLength(packed.dataBase64, 'base64');
+    if (assetBytes + size > MAX_PUSH_ASSET_BYTES) return false;
+    seenAssets.add(assetKey);
+    packedOrGone.add(assetKey);
+    assetBytes += size;
+    assets.push(packed);
+    return true;
+  };
+
+  const loadTrashRowForPush = (bvid) => {
+    try {
+      return getDb()
+        .prepare(
+          `SELECT bvid, notes_json AS notesJson, video_title AS videoTitle,
+                  session_id AS sessionId, updated_at AS updatedAt,
+                  created_at AS createdAt, mode, body_md AS bodyMd,
+                  revision, deleted_at AS deletedAt
+           FROM note_trash WHERE bvid = ?`
+        )
+        .get(String(bvid || '').trim());
+    } catch {
+      return null;
+    }
+  };
+
   for (const p of pending) {
     if (p.entityType === 'note' && !seenNotes.has(p.entityKey)) {
       seenNotes.add(p.entityKey);
@@ -764,6 +687,60 @@ function buildPendingPushPayload() {
         revision: doc.revision,
         chunks: loadChunksForBvid(doc.bvid),
       });
+      for (const name of listAssetFilenames(doc.bvid)) {
+        packAsset(doc.bvid, name);
+      }
+    } else if (
+      (p.entityType === 'note_trash' || p.entityType === 'note_trash_purge') &&
+      !seenTrash.has(p.entityKey)
+    ) {
+      seenTrash.add(p.entityKey);
+      const purged =
+        p.entityType === 'note_trash_purge' ||
+        hasPendingEntity('note_trash_purge', p.entityKey);
+      const row = loadTrashRowForPush(p.entityKey);
+      if (!row) {
+        trashNotes.push({
+          bvid: p.entityKey,
+          deleted: true,
+          ...(purged ? { purged: true } : {}),
+        });
+        continue;
+      }
+      let notesObj = {};
+      try {
+        notesObj = JSON.parse(row.notesJson || '{}') || {};
+      } catch {
+        notesObj = {};
+      }
+      trashNotes.push({
+        bvid: row.bvid,
+        notes: notesObj,
+        notesJson: row.notesJson || '{}',
+        title: row.videoTitle || '',
+        videoTitle: row.videoTitle || '',
+        sessionId: row.sessionId || null,
+        updatedAt: Number(row.updatedAt) || 0,
+        createdAt: Number(row.createdAt) || 0,
+        mode: row.mode || 'user',
+        bodyMd: row.bodyMd || '',
+        revision: Number(row.revision) || 0,
+        deletedAt: Number(row.deletedAt) || Date.now(),
+      });
+    } else if (p.entityType === 'note_asset') {
+      const [key, ...rest] = String(p.entityKey).split('::');
+      const name = rest.join('::');
+      const assetKey = `${safeAssetKey(key)}::${safeAssetFilename(name)}`;
+      if (!packAsset(key, name) && key && name && !seenAssets.has(assetKey)) {
+        // 本地文件已删：向云端声明删除
+        seenAssets.add(assetKey);
+        packedOrGone.add(assetKey);
+        assets.push({
+          bvid: safeAssetKey(key),
+          filename: safeAssetFilename(name),
+          deleted: true,
+        });
+      }
     } else if (p.entityType === 'study_day' && !seenStudy.has(p.entityKey)) {
       seenStudy.add(p.entityKey);
       const day = getStudyDay(p.entityKey);
@@ -866,9 +843,22 @@ function buildPendingPushPayload() {
     }
   }
 
+  const pendingToClear = pending.filter((p) => {
+    if (p.entityType !== 'note_asset') return true;
+    return seenAssets.has(p.entityKey) || packedOrGone.has(p.entityKey);
+  });
+
   return {
-    pending,
-    changes: { notes, studyDays, courseGroups, courseFolders, courseItems },
+    pending: pendingToClear,
+    changes: {
+      notes,
+      studyDays,
+      courseGroups,
+      courseFolders,
+      courseItems,
+      assets,
+      trashNotes,
+    },
   };
 }
 
@@ -886,6 +876,24 @@ function isRemoteDeleted(row) {
   if (row.deleted === true || row.deleted === 1 || row.deleted === '1') return true;
   if (row.deleted_at != null || row.deletedAt != null) return true;
   return false;
+}
+
+function isBlankRemoteNote(n, notesObj) {
+  const body = String(n?.body_md ?? n?.bodyMd ?? '').trim();
+  const nn = notesObj && typeof notesObj === 'object' ? notesObj : {};
+  const cues = Array.isArray(nn.cues)
+    ? nn.cues.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const notes = Array.isArray(nn.notes)
+    ? nn.notes.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  const summary = String(nn.summary || '').trim();
+  const cornellTitle = String(nn.title || '').trim();
+  return !body && !cues.length && !notes.length && !summary && !cornellTitle;
+}
+
+function keepLocalOverRemote(entityType, entityKey) {
+  markPending(entityType, entityKey, { force: true });
 }
 
 function hasPendingEntity(entityType, entityKey) {
@@ -916,10 +924,20 @@ function applyRemoteChangesInner(changes = {}) {
   const courseItems = Array.isArray(changes.courseItems)
     ? changes.courseItems
     : [];
+  const assets = Array.isArray(changes.assets) ? changes.assets : [];
+  const trashNotes = Array.isArray(changes.trashNotes)
+    ? changes.trashNotes
+    : Array.isArray(changes.noteTrash)
+      ? changes.noteTrash
+      : [];
 
   let applied = 0;
+  for (const a of assets) {
+    if (writeRemoteNoteAsset(a)) applied += 1;
+  }
+
   for (const n of notes) {
-    const bvid = String(n.bvid || '').trim();
+    const bvid = normalizeBvid(n.bvid) || String(n.bvid || '').trim();
     if (!bvid) continue;
     if (isRemoteDeleted(n)) {
       try {
@@ -939,11 +957,9 @@ function applyRemoteChangesInner(changes = {}) {
     }
     if (hasTombstone('note', bvid) || (hasPendingEntity('note', bvid) && !loadNoteDoc(bvid))) {
       // 本地已删：不要被云端旧副本复活
+      keepLocalOverRemote('note', bvid);
       continue;
     }
-    const remoteUpdated = Number(n.updated_at ?? n.updatedAt) || 0;
-    const local = loadNoteDoc(bvid);
-    if (local && local.updatedAt > remoteUpdated) continue;
     let notesObj = n.notes;
     if (typeof n.notes_json === 'string') {
       try {
@@ -951,6 +967,16 @@ function applyRemoteChangesInner(changes = {}) {
       } catch {
         notesObj = null;
       }
+    }
+    const remoteUpdated = Number(n.updated_at ?? n.updatedAt) || 0;
+    const local = loadNoteDoc(bvid);
+    if (local && local.updatedAt > remoteUpdated) {
+      keepLocalOverRemote('note', bvid);
+      continue;
+    }
+    if (isBlankRemoteNote(n, notesObj)) {
+      // 云端空壳笔记：不新建、不覆盖本地
+      continue;
     }
     saveNoteDoc(bvid, {
       notes: notesObj,
@@ -1045,18 +1071,18 @@ function applyRemoteChangesInner(changes = {}) {
     if (!remoteTitle && !remoteMind) {
       if (localHasContent) {
         try {
-          markPending('course_group', id);
+          keepLocalOverRemote('course_group', id);
           const folders = database
             .prepare('SELECT id FROM course_group_folders WHERE group_id = ?')
             .all(id);
-          for (const f of folders) markPending('course_folder', f.id);
+          for (const f of folders) keepLocalOverRemote('course_folder', f.id);
           const items = database
             .prepare(
               'SELECT bvid FROM course_group_items WHERE group_id = ?'
             )
             .all(id);
           for (const it of items) {
-            if (it?.bvid) markPending('course_item', `${id}::${it.bvid}`);
+            if (it?.bvid) keepLocalOverRemote('course_item', `${id}::${it.bvid}`);
           }
         } catch {
           /* ignore */
@@ -1069,16 +1095,16 @@ function applyRemoteChangesInner(changes = {}) {
         database.prepare('DELETE FROM course_groups WHERE id = ?').run(id);
       });
       addTombstone('course_group', id);
-      markPending('course_group', id);
+      keepLocalOverRemote('course_group', id);
       applied += 1;
       continue;
     }
 
     const updatedAt = Number(g.updated_at ?? g.updatedAt) || Date.now();
     const localUpdated = Number(localRow?.updated_at) || 0;
-    // 本地更新：不要被更旧的云端副本覆盖
+    // 本地更新：不要被更旧的云端副本覆盖，回推让云端跟上
     if (localRow && localUpdated > updatedAt) {
-      markPending('course_group', id);
+      keepLocalOverRemote('course_group', id);
       continue;
     }
     // 云端空标题/空导图不得抹掉本地已有内容
@@ -1127,6 +1153,14 @@ function applyRemoteChangesInner(changes = {}) {
     const groupId = String(f.group_id ?? f.groupId ?? '').trim();
     if (isRemoteDeleted(f)) {
       if (!id) continue;
+      const exists = getDb()
+        .prepare('SELECT id FROM course_group_folders WHERE id = ?')
+        .get(id);
+      if (exists) {
+        // 本地还在用这个文件夹：云端删除不得拆掉分类
+        keepLocalOverRemote('course_folder', id);
+        continue;
+      }
       try {
         getDb()
           .prepare('DELETE FROM course_group_folders WHERE id = ?')
@@ -1144,11 +1178,21 @@ function applyRemoteChangesInner(changes = {}) {
       continue;
     }
     if (!id || !groupId) continue;
-    if (hasPendingEntity('course_folder', id)) {
-      const exists = getDb()
-        .prepare('SELECT id FROM course_group_folders WHERE id = ?')
-        .get(id);
-      if (!exists) continue;
+    if (hasTombstone('course_folder', id)) {
+      keepLocalOverRemote('course_folder', id);
+      continue;
+    }
+    const localFolder = getDb()
+      .prepare('SELECT id, updated_at AS updatedAt FROM course_group_folders WHERE id = ?')
+      .get(id);
+    if (hasPendingEntity('course_folder', id) && !localFolder) continue;
+    if (localFolder) {
+      const remoteUpdated = Number(f.updated_at ?? f.updatedAt) || 0;
+      const localUpdated = Number(localFolder.updatedAt) || 0;
+      if (localUpdated >= remoteUpdated) {
+        if (localUpdated > remoteUpdated) keepLocalOverRemote('course_folder', id);
+        continue;
+      }
     }
     const updatedAt = Number(f.updated_at ?? f.updatedAt) || Date.now();
     getDb()
@@ -1176,10 +1220,20 @@ function applyRemoteChangesInner(changes = {}) {
 
   for (const it of courseItems) {
     const groupId = String(it.group_id ?? it.groupId ?? '').trim();
-    const bvid = String(it.bvid || '').trim();
+    const bvid = normalizeBvid(it.bvid) || String(it.bvid || '').trim();
     if (!groupId || !bvid) continue;
     const itemKey = `${groupId}::${bvid}`;
+    const localItem = getDb()
+      .prepare(
+        `SELECT group_id AS groupId, bvid, title, ord, status, folder_id AS folderId
+         FROM course_group_items WHERE group_id = ? AND bvid = ? COLLATE NOCASE`
+      )
+      .get(groupId, bvid);
     if (isRemoteDeleted(it)) {
+      if (localItem) {
+        keepLocalOverRemote('course_item', itemKey);
+        continue;
+      }
       try {
         getDb()
           .prepare(
@@ -1193,13 +1247,24 @@ function applyRemoteChangesInner(changes = {}) {
       applied += 1;
       continue;
     }
-    if (hasPendingEntity('course_item', itemKey)) {
-      const exists = getDb()
-        .prepare(
-          'SELECT bvid FROM course_group_items WHERE group_id = ? AND bvid = ? COLLATE NOCASE'
-        )
-        .get(groupId, bvid);
-      if (!exists) continue;
+    if (hasTombstone('course_item', itemKey)) {
+      keepLocalOverRemote('course_item', itemKey);
+      continue;
+    }
+    if (hasPendingEntity('course_item', itemKey) && !localItem) continue;
+    if (localItem) {
+      // 本地已有条目：保留分类；若和云端不同，回推让云端跟上本地
+      const remoteFolder = String(it.folder_id ?? it.folderId ?? '') || '';
+      const localFolder = String(localItem.folderId || '');
+      const remoteTitle = String(it.title || '').trim();
+      const localTitle = String(localItem.title || '').trim();
+      if (
+        localFolder !== remoteFolder ||
+        (localTitle && localTitle !== remoteTitle)
+      ) {
+        keepLocalOverRemote('course_item', itemKey);
+      }
+      continue;
     }
     getDb()
       .prepare(
@@ -1224,6 +1289,107 @@ function applyRemoteChangesInner(changes = {}) {
       );
     clearPending([
       { entityType: 'course_item', entityKey: itemKey },
+    ]);
+    applied += 1;
+  }
+
+  for (const t of trashNotes) {
+    const bvid = normalizeBvid(t.bvid) || String(t.bvid || '').trim();
+    if (!bvid) continue;
+    const database = getDb();
+    ensureTrashTables(database);
+    const purged =
+      t.purged === true || t.purged === 1 || t.purged === '1';
+    if (isRemoteDeleted(t) || purged) {
+      try {
+        database.prepare('DELETE FROM note_trash WHERE bvid = ?').run(bvid);
+      } catch {
+        /* ignore */
+      }
+      if (purged) {
+        const dir = path.join(getAssetsDir(), safeAssetKey(bvid));
+        if (fs.existsSync(dir)) {
+          try {
+            fs.rmSync(dir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      clearPending([
+        { entityType: 'note_trash', entityKey: bvid },
+        { entityType: 'note_trash_purge', entityKey: bvid },
+      ]);
+      applied += 1;
+      continue;
+    }
+    if (
+      hasPendingEntity('note_trash', bvid) ||
+      hasPendingEntity('note_trash_purge', bvid)
+    ) {
+      const localTrash = database
+        .prepare('SELECT deleted_at AS deletedAt FROM note_trash WHERE bvid = ?')
+        .get(bvid);
+      const remoteDeleted = Number(t.deleted_at ?? t.deletedAt) || 0;
+      const localDeleted = Number(localTrash?.deletedAt) || 0;
+      // 本地已彻底删 / 已恢复（无行但 pending）：回推
+      if (!localTrash) {
+        if (hasPendingEntity('note_trash_purge', bvid)) {
+          keepLocalOverRemote('note_trash_purge', bvid);
+        } else {
+          keepLocalOverRemote('note_trash', bvid);
+        }
+        continue;
+      }
+      if (localDeleted > remoteDeleted) {
+        keepLocalOverRemote('note_trash', bvid);
+        continue;
+      }
+    }
+    let notesJson = t.notes_json ?? t.notesJson;
+    if (notesJson == null && t.notes != null) {
+      notesJson =
+        typeof t.notes === 'string' ? t.notes : JSON.stringify(t.notes || {});
+    }
+    if (typeof notesJson !== 'string') {
+      notesJson = JSON.stringify(notesJson || {});
+    }
+    const deletedAt = Number(t.deleted_at ?? t.deletedAt) || Date.now();
+    const updatedAt = Number(t.updated_at ?? t.updatedAt) || deletedAt;
+    database
+      .prepare(
+        `
+        INSERT INTO note_trash (
+          bvid, notes_json, video_title, session_id, updated_at, created_at,
+          mode, body_md, revision, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(bvid) DO UPDATE SET
+          notes_json = excluded.notes_json,
+          video_title = excluded.video_title,
+          session_id = excluded.session_id,
+          updated_at = excluded.updated_at,
+          created_at = excluded.created_at,
+          mode = excluded.mode,
+          body_md = excluded.body_md,
+          revision = excluded.revision,
+          deleted_at = excluded.deleted_at
+      `
+      )
+      .run(
+        bvid,
+        notesJson || '{}',
+        t.video_title ?? t.videoTitle ?? t.title ?? null,
+        t.session_id ?? t.sessionId ?? null,
+        updatedAt,
+        Number(t.created_at ?? t.createdAt) || updatedAt,
+        t.mode || 'user',
+        String(t.body_md ?? t.bodyMd ?? ''),
+        Number(t.revision) || 0,
+        deletedAt
+      );
+    clearPending([
+      { entityType: 'note_trash', entityKey: bvid },
+      { entityType: 'note_trash_purge', entityKey: bvid },
     ]);
     applied += 1;
   }
@@ -2626,12 +2792,94 @@ function listChunksForBvids(bvids, { limit = 40, perBvid = 6 } = {}) {
   return results;
 }
 
-function gatherCourseChunks(groupId, { limit = 36 } = {}) {
+/** 课程组内每个视频的全部切块（按 chunk_index），不做检索抽样 */
+function listAllChunksGroupedByBvid(bvids) {
+  const keys = normalizeBvidFilter({ bvids });
+  if (!keys.length) return [];
+  const database = getDb();
+  const stmt = database.prepare(
+    `
+    SELECT id, bvid, chunk_index AS chunkIndex, heading, text
+    FROM note_chunks
+    WHERE bvid = ?
+    ORDER BY chunk_index ASC
+  `
+  );
+  return keys.map((bv) => ({ bvid: bv, chunks: stmt.all(bv) || [] }));
+}
+
+/**
+ * 轮询各视频切块，尽量覆盖整组笔记；受 maxChunks / maxChars 约束（按原文长度粗估）。
+ */
+function pickChunksRoundRobin(grouped, { maxChunks = 160, maxChars = 72000 } = {}) {
+  const lim = Math.max(8, Math.min(240, Number(maxChunks) || 160));
+  const charCap = Math.max(8000, Math.min(120000, Number(maxChars) || 72000));
+  const queues = (grouped || [])
+    .map((g) => (Array.isArray(g.chunks) ? g.chunks.slice() : []))
+    .filter((q) => q.length);
+  const results = [];
+  const seen = new Set();
+  let chars = 0;
+  let progressed = true;
+  outer: while (progressed && results.length < lim && chars < charCap) {
+    progressed = false;
+    for (const q of queues) {
+      if (!q.length || results.length >= lim) continue;
+      const row = q[0];
+      if (!row || seen.has(row.id)) {
+        q.shift();
+        continue;
+      }
+      const add = String(row.text || '').length + String(row.heading || '').length;
+      if (results.length >= 12 && chars + add > charCap) {
+        break outer;
+      }
+      q.shift();
+      seen.add(row.id);
+      results.push(row);
+      chars += add;
+      progressed = true;
+    }
+  }
+  return { chunks: results, totalChars: chars, videoCount: queues.length };
+}
+
+function gatherCourseChunks(groupId, { limit = 36, mode = 'search' } = {}) {
   const group = getCourseGroup(groupId);
   if (!group) return { ok: false, error: 'not_found', group: null, chunks: [] };
   const bvids = (group.items || []).map((i) => i.bvid).filter(Boolean);
   if (!bvids.length) {
     return { ok: false, error: 'no_items', group, chunks: [] };
+  }
+
+  const coverage = String(mode || 'search').toLowerCase();
+  if (coverage === 'full' || coverage === 'mindmap') {
+    const grouped = listAllChunksGroupedByBvid(bvids);
+    const available = grouped.reduce((n, g) => n + (g.chunks?.length || 0), 0);
+    if (!available) {
+      return { ok: false, error: 'no_chunks', group, chunks: [] };
+    }
+    const maxChunks = Math.max(24, Math.min(200, Number(limit) || 160));
+    const { chunks, totalChars, videoCount } = pickChunksRoundRobin(grouped, {
+      maxChunks,
+      maxChars: 72000,
+    });
+    if (!chunks.length) {
+      return { ok: false, error: 'no_chunks', group, chunks: [] };
+    }
+    return {
+      ok: true,
+      group,
+      chunks,
+      coverage: {
+        mode: 'full',
+        videoCount,
+        availableChunks: available,
+        usedChunks: chunks.length,
+        totalChars,
+        truncated: chunks.length < available,
+      },
+    };
   }
 
   const lim = Math.max(6, Math.min(40, Number(limit) || 36));
@@ -2649,7 +2897,16 @@ function gatherCourseChunks(groupId, { limit = 36 } = {}) {
   if (!chunks.length) {
     return { ok: false, error: 'no_chunks', group, chunks: [] };
   }
-  return { ok: true, group, chunks };
+  return {
+    ok: true,
+    group,
+    chunks,
+    coverage: {
+      mode: 'search',
+      usedChunks: chunks.length,
+      truncated: true,
+    },
+  };
 }
 
 function backfillBodyMd(database) {//填充笔记内容
@@ -2815,15 +3072,6 @@ function saveNoteDoc(bvid, patch = {}) {
   clearTombstone('note', key);
   markPending('note', key);
   const saved = loadNoteDoc(key);
-  // 云端拉取写入时不触发；笔记够成熟则后台预生成题库
-  if (suppressWriteHook === 0 && saved) {
-    try {
-      const { scheduleQuizPregenForNote } = require('./quiz-pregen');
-      scheduleQuizPregenForNote(key, { reason: 'note_saved' });
-    } catch {
-      /* ignore */
-    }
-  }
   return saved;
 }//数据更新逻辑
 
@@ -2913,30 +3161,411 @@ function deleteNoteDoc(bvid) {
   if (!key) return { ok: false, error: 'no_bvid' };
   try {
     const database = getDb();
+    ensureTrashTables(database);
+    const row = database
+      .prepare(
+        `SELECT bvid, notes_json, video_title, session_id, updated_at, created_at,
+                mode, body_md, revision
+         FROM cornell_notes WHERE bvid = ?`
+      )
+      .get(key);
+    if (!row) return { ok: true, deleted: false, bvid: key };
+
+    const deletedAt = Date.now();
     const info = withTransaction(database, () => {
-      database.prepare('DELETE FROM note_chunks_fts WHERE bvid = ?').run(key);
+      database
+        .prepare(
+          `
+          INSERT INTO note_trash (
+            bvid, notes_json, video_title, session_id, updated_at, created_at,
+            mode, body_md, revision, deleted_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(bvid) DO UPDATE SET
+            notes_json = excluded.notes_json,
+            video_title = excluded.video_title,
+            session_id = excluded.session_id,
+            updated_at = excluded.updated_at,
+            created_at = excluded.created_at,
+            mode = excluded.mode,
+            body_md = excluded.body_md,
+            revision = excluded.revision,
+            deleted_at = excluded.deleted_at
+        `
+        )
+        .run(
+          row.bvid,
+          row.notes_json || '{}',
+          row.video_title || null,
+          row.session_id || null,
+          Number(row.updated_at) || deletedAt,
+          Number(row.created_at) || Number(row.updated_at) || deletedAt,
+          row.mode || 'user',
+          row.body_md || '',
+          Number(row.revision) || 0,
+          deletedAt
+        );
+      try {
+        database.prepare('DELETE FROM note_chunks_fts WHERE bvid = ?').run(key);
+      } catch (err) {
+        console.warn('[bili-pet] trash fts cleanup:', err.message || err);
+      }
       database.prepare('DELETE FROM note_chunks WHERE bvid = ?').run(key);
       return database.prepare('DELETE FROM cornell_notes WHERE bvid = ?').run(key);
     });
-    const dir = path.join(getAssetsDir(), safeAssetKey(key));
-    if (fs.existsSync(dir)) {
-      try {
-        fs.rmSync(dir, { recursive: true, force: true });
-      } catch {
-      }
-    }
+    // 附件保留至废纸篓彻底删除 / 过期清理，便于恢复
     if (info.changes > 0) {
       addTombstone('note', key);
       markPending('note', key);
+      markPending('note_trash', key);
+    }
+    return { ok: true, deleted: info.changes > 0, bvid: key, trashed: true };
+  } catch (err) {
+    console.warn('[bili-pet] deleteNoteDoc/trash failed:', err.message || err);
+    return { ok: false, error: err.message || String(err) };
+  }
+}
+
+function trashRowToSummary(row) {
+  const title = String(row.video_title || '').trim() || row.bvid;
+  const preview = String(row.body_md || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+  const deletedAt = Number(row.deleted_at) || 0;
+  const expiresAt = deletedAt + TRASH_RETENTION_MS;
+  return {
+    bvid: row.bvid,
+    title,
+    preview,
+    bodyLen: String(row.body_md || '').length,
+    updatedAt: Number(row.updated_at) || 0,
+    createdAt: Number(row.created_at) || Number(row.updated_at) || 0,
+    deletedAt,
+    expiresAt,
+    daysLeft: Math.max(0, Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000))),
+  };
+}
+
+function purgeExpiredTrash(database) {
+  const db = database || getDb();
+  const cutoff = Date.now() - TRASH_RETENTION_MS;
+  const expired = db
+    .prepare('SELECT bvid FROM note_trash WHERE deleted_at < ?')
+    .all(cutoff);
+  for (const row of expired) {
+    purgeNoteFromTrash(row.bvid, { database: db });
+  }
+  return { ok: true, purged: expired.length };
+}
+
+function listTrashNotes() {
+  try {
+    const database = getDb();
+    ensureTrashTables(database);
+    purgeExpiredTrash(database);
+    const cutoff = Date.now() - TRASH_RETENTION_MS;
+    const rows = database
+      .prepare(
+        `SELECT bvid, video_title, body_md, updated_at, created_at, deleted_at
+         FROM note_trash
+         WHERE deleted_at >= ?
+         ORDER BY deleted_at DESC`
+      )
+      .all(cutoff);
+    return rows.map(trashRowToSummary);
+  } catch (err) {
+    console.warn('[bili-pet] listTrashNotes failed:', err.message || err);
+    return [];
+  }
+}
+
+function restoreNoteFromTrash(bvid) {
+  const key = normalizeBvid(bvid) || String(bvid || '').trim();
+  if (!key) return { ok: false, error: 'no_bvid' };
+  try {
+    const database = getDb();
+    const row = database
+      .prepare(
+        `SELECT bvid, notes_json, video_title, session_id, updated_at, created_at,
+                mode, body_md, revision
+         FROM note_trash WHERE bvid = ?`
+      )
+      .get(key);
+    if (!row) return { ok: false, error: 'not_found' };
+
+    let notesObj = {};
+    try {
+      notesObj = JSON.parse(row.notes_json || '{}') || {};
+    } catch {
+      notesObj = {};
+    }
+
+    clearTombstone('note', key);
+    const doc = saveNoteDoc(key, {
+      notes: notesObj,
+      title: row.video_title || '',
+      sessionId: row.session_id || null,
+      mode: row.mode || 'user',
+      bodyMd: row.body_md || '',
+    });
+    // 保留原创建时间
+    if (row.created_at) {
       try {
-        deleteQuizBankForBvid(key);
+        database
+          .prepare('UPDATE cornell_notes SET created_at = ? WHERE bvid = ?')
+          .run(Number(row.created_at) || Date.now(), key);
       } catch {
         /* ignore */
       }
     }
-    return { ok: true, deleted: info.changes > 0, bvid: key };
+    database.prepare('DELETE FROM note_trash WHERE bvid = ?').run(key);
+    markPending('note_trash', key);
+    return { ok: true, doc: loadNoteDoc(key) || doc, bvid: key };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
+  }
+}
+
+function purgeNoteFromTrash(bvid, { database = null } = {}) {
+  const key = normalizeBvid(bvid) || String(bvid || '').trim();
+  if (!key) return { ok: false, error: 'no_bvid' };
+  try {
+    const db = database || getDb();
+    const row = db.prepare('SELECT bvid FROM note_trash WHERE bvid = ?').get(key);
+    if (!row) return { ok: true, purged: false, bvid: key };
+    const assetKey = safeAssetKey(key);
+    const filenames = listAssetFilenames(key);
+    db.prepare('DELETE FROM note_trash WHERE bvid = ?').run(key);
+    const dir = path.join(getAssetsDir(), assetKey);
+    if (fs.existsSync(dir)) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    markPending('note_trash_purge', key);
+    for (const name of filenames) {
+      markPending('note_asset', `${assetKey}::${name}`);
+    }
+    // 若库中已无该笔记，确保删除态仍会推到云端
+    if (!loadNoteDoc(key)) {
+      addTombstone('note', key);
+      markPending('note', key);
+    }
+    return { ok: true, purged: true, bvid: key };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+}
+
+function mimeFromAssetName(name) {
+  const ext = path.extname(String(name || '')).slice(1).toLowerCase();
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'svg') return 'image/svg+xml';
+  return 'image/png';
+}
+
+function safeAssetFilename(name) {
+  const s = String(name || '').trim();
+  if (!s || s.includes('..') || s.includes('/') || s.includes('\\')) return '';
+  if (!/^[\w.-]+$/.test(s)) return '';
+  return s.slice(0, 180);
+}
+
+function listAssetFilenames(bvid) {
+  const key = safeAssetKey(bvid);
+  if (!key) return [];
+  const names = new Set();
+  for (const assetsRoot of listAssetRoots()) {
+    const dir = path.join(assetsRoot, key);
+    try {
+      if (!fs.existsSync(dir)) continue;
+      for (const n of fs.readdirSync(dir)) {
+        const name = safeAssetFilename(n);
+        if (!name) continue;
+        try {
+          if (fs.statSync(path.join(dir, name)).isFile()) names.add(name);
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return [...names];
+}
+
+function noteAssetMarkdown(bvid, filename) {
+  const key = safeAssetKey(bvid);
+  const name = safeAssetFilename(filename);
+  const url = `bilinotes://asset/${encodeURIComponent(key)}/${encodeURIComponent(name)}`;
+  return `![图片](${url})`;
+}
+
+function bodyIncludesAsset(body, bvid, filename) {
+  const text = String(body || '');
+  const name = String(filename || '');
+  if (!name) return false;
+  if (text.includes(name)) return true;
+  if (text.includes(encodeURIComponent(name))) return true;
+  const key = safeAssetKey(bvid);
+  if (text.includes(`bilinotes://asset/${encodeURIComponent(key)}/${encodeURIComponent(name)}`)) {
+    return true;
+  }
+  return false;
+}
+
+const MAX_PUSH_ASSET_BYTES = 10 * 1024 * 1024;
+const MAX_ONE_ASSET_BYTES = 6 * 1024 * 1024;
+
+function readAssetForPush(bvid, filename) {
+  const key = safeAssetKey(bvid);
+  const name = safeAssetFilename(filename);
+  if (!key || !name) return null;
+  const resolved = resolveNoteAssetFile(key, name);
+  if (!resolved) return null;
+  try {
+    const st = fs.statSync(resolved);
+    if (!st.isFile() || st.size <= 0 || st.size > MAX_ONE_ASSET_BYTES) return null;
+    const buf = fs.readFileSync(resolved);
+    return {
+      bvid: key,
+      filename: name,
+      mime: mimeFromAssetName(name),
+      dataBase64: buf.toString('base64'),
+      updatedAt: Math.floor(st.mtimeMs),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeRemoteNoteAsset(asset) {
+  const bvid = safeAssetKey(asset?.bvid);
+  const filename = safeAssetFilename(asset?.filename);
+  if (!bvid || !filename) return false;
+  const dir = path.join(getAssetsDir(), bvid);
+  const dest = path.join(dir, filename);
+  const root = path.normalize(getAssetsDir() + path.sep);
+  if (!path.normalize(dest).startsWith(root)) return false;
+  if (isRemoteDeleted(asset)) {
+    try {
+      if (fs.existsSync(dest)) fs.unlinkSync(dest);
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }
+  const raw = String(asset.dataBase64 || asset.data_base64 || '');
+  if (!raw) return false;
+  let buf;
+  try {
+    buf = Buffer.from(raw, 'base64');
+  } catch {
+    return false;
+  }
+  if (!buf.length) return false;
+  try {
+    if (fs.existsSync(dest)) {
+      const st = fs.statSync(dest);
+      const remoteUpdated = Number(asset.updated_at ?? asset.updatedAt) || 0;
+      if (st.size > 0 && st.mtimeMs >= remoteUpdated) return true;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(dest, buf);
+    return true;
+  } catch (err) {
+    console.warn('[bili-pet] write remote asset failed:', err.message || err);
+    return false;
+  }
+}
+
+function assetFolderToNoteBvid(dirName) {
+  const name = String(dirName || '').trim();
+  if (!name) return '';
+  const paged = /^(BV[\w]+)_p(\d+)$/i.exec(name);
+  if (paged) return `${paged[1]}#p${paged[2]}`;
+  return name;
+}
+
+function relinkOrphanNoteAssets() {
+  let linked = 0;
+  try {
+    const byBvid = new Map();
+    const rows = getDb()
+      .prepare('SELECT bvid, body_md AS bodyMd FROM cornell_notes')
+      .all();
+    for (const row of rows) {
+      const bvid = String(row.bvid || '').trim();
+      if (bvid) byBvid.set(bvid, String(row.bodyMd || ''));
+    }
+
+    const dirNames = [];
+    const seenDirs = new Set();
+    for (const root of listAssetRoots()) {
+      try {
+        if (!fs.existsSync(root)) continue;
+        for (const name of fs.readdirSync(root)) {
+          if (seenDirs.has(name)) continue;
+          seenDirs.add(name);
+          dirNames.push(name);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const candidates = new Set([...byBvid.keys()]);
+    for (const dirName of dirNames) {
+      const mapped = assetFolderToNoteBvid(dirName);
+      if (mapped) candidates.add(mapped);
+      if (dirName) candidates.add(dirName);
+    }
+
+    for (const bvid of candidates) {
+      if (!bvid || hasTombstone('note', bvid)) continue;
+      const files = listAssetFilenames(bvid);
+      if (!files.length) continue;
+      const body = byBvid.has(bvid)
+        ? byBvid.get(bvid)
+        : String(loadNoteDoc(bvid)?.bodyMd || '');
+      const missing = files.filter((name) => !bodyIncludesAsset(body, bvid, name));
+      if (!missing.length) continue;
+      if (!loadNoteDoc(bvid) && !byBvid.has(bvid)) continue;
+      const extra = missing.map((name) => noteAssetMarkdown(bvid, name)).join('\n');
+      const next = body.trim() ? `${body.trimEnd()}\n\n${extra}\n` : `${extra}\n`;
+      saveNoteDoc(bvid, { bodyMd: next });
+      byBvid.set(bvid, next);
+      linked += missing.length;
+    }
+  } catch (err) {
+    console.warn('[bili-pet] relink orphan assets failed:', err.message || err);
+  }
+  if (linked) {
+    console.log(`[bili-pet] relinked ${linked} local note image(s) still on disk`);
+  }
+  return { ok: true, linked };
+}
+
+function markAllNoteAssetsPending() {
+  try {
+    const rows = getDb().prepare('SELECT bvid FROM cornell_notes').all();
+    for (const row of rows) {
+      const bvid = String(row.bvid || '').trim();
+      if (!bvid || hasTombstone('note', bvid)) continue;
+      const files = listAssetFilenames(bvid);
+      if (!files.length) continue;
+      markPending('note', bvid);
+      const key = safeAssetKey(bvid);
+      for (const name of files) {
+        markPending('note_asset', `${key}::${name}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[bili-pet] mark note assets pending failed:', err.message || err);
   }
 }
 
@@ -2957,6 +3586,8 @@ function saveNoteAsset(bvid, { bytes, ext = 'png', mime = 'image/png' } = {}) {
   }
   fs.writeFileSync(resolved, Buffer.from(bytes));
   const url = `bilinotes://asset/${encodeURIComponent(key)}/${encodeURIComponent(name)}`;
+  markPending('note', bvid);
+  markPending('note_asset', `${key}::${name}`);
   return {
     bvid: key,
     path: resolved,
@@ -2968,6 +3599,7 @@ function saveNoteAsset(bvid, { bytes, ext = 'png', mime = 'image/png' } = {}) {
 
 module.exports = {
   getAssetsDir,
+  resolveNoteAssetFile,
   getLegacyDbFile,
   cornellToMarkdown,
   chunkMarkdown,
@@ -2977,8 +3609,14 @@ module.exports = {
   loadNoteDoc,
   saveNoteDoc,
   saveNoteAsset,
+  relinkOrphanNoteAssets,
+  markAllNoteAssetsPending,
   listNoteDocs,
   deleteNoteDoc,
+  listTrashNotes,
+  restoreNoteFromTrash,
+  purgeNoteFromTrash,
+  purgeExpiredTrash,
   closeNotesDb,
   setActiveUid,
   purgeUidLocalStore,
@@ -3027,11 +3665,5 @@ module.exports = {
   addDistractCount,
   getStudyDay,
   listStudyActivity,
-  countQuizBankForBvid,
-  getQuizBankMetaForBvid,
-  saveQuizBankQuestions,
-  takeQuizBankQuestions,
-  deleteQuizBankForBvid,
-  assessNoteQuizMaturity,
 };
 //主要是数据库逻辑，有一部分AI维护优先让AI读逻辑，我都标注出来了

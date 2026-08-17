@@ -44,7 +44,8 @@ const {
   normalizeBvid,
   setActiveUid,
   getActiveUid,
-  getAssetsDir,
+  resolveNoteAssetFile,
+  localDbExists,
 } = require('./notes-db');
 const {
   startCloudSync,
@@ -57,6 +58,7 @@ const {
   scheduleBackgroundPurge,
   sweepOrphanLocalStores,
   loadTokenForUid,
+  clearFirstPullCelebrated,
 } = require('./cloud-sync');
 const {
   startFriendsCloud,
@@ -108,7 +110,7 @@ const STUDY_ZONE_TIDS = new Set([
   36, 201, 124, 228, 207, 208, 209, 229, 122, 39, 96, 98,
   1010, 2084, 2085, 2086, 2087, 2088, 2089, 2090, 2091, 2092, 2093, 2094, 2095,
 ]);
-const STUDY_ZONE_RE = /学习|知识|课堂/;
+const STUDY_ZONE_RE = /学习|知识|课堂|教育|应试|科普|考研|职场/;
 
 let studyClock = null;
 const STUDY_CREDIT_CAP_MS = 10_000;
@@ -117,6 +119,8 @@ let accountOpChain = Promise.resolve();
 let accountOpSeq = 0;
 /** Prevent heartbeat from restarting an in-flight first-pull for the same uid. */
 let accountReadyInFlightUid = null;
+/** 本进程已为该 uid 播过「云端首拉完成」并刷新过窗口，避免反复 reload/提示 */
+let lastKbReadyCelebratedUid = null;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -145,13 +149,8 @@ function resolveBilinotesUrl(requestUrl) {
   const u = new URL(requestUrl);
   const parts = u.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
   if (u.hostname !== 'asset' || parts.length < 2) return null;
-  const rel = parts.map((p) => decodeURIComponent(p)).join(path.sep);
-  const assetsRoot = getAssetsDir();
-  const full = path.normalize(path.join(assetsRoot, rel));
-  const root = path.normalize(assetsRoot + path.sep);
-  if (full !== path.normalize(assetsRoot) && !full.startsWith(root)) return null;
-  if (!fs.existsSync(full)) return null;
-  return full;
+  const decoded = parts.map((p) => decodeURIComponent(p));
+  return resolveNoteAssetFile(decoded[0], decoded.slice(1).join('/'));
 }//拼接url，把协议地址转化为真实地址
 function pidFile() {
   return dataPath('.bili-pet.pid');
@@ -793,7 +792,8 @@ function isStudyRelatedPayload(payload = {}) {
   if (typeof payload.studyRelated === 'boolean') return payload.studyRelated;
   const tid = Number(payload.tid);
   const tidV2 = Number(payload.tid_v2 ?? payload.tidV2);
-  if (STUDY_ZONE_TIDS.has(tid) || STUDY_ZONE_TIDS.has(tidV2)) return true;
+  if (Number.isFinite(tid) && STUDY_ZONE_TIDS.has(tid)) return true;
+  if (Number.isFinite(tidV2) && STUDY_ZONE_TIDS.has(tidV2)) return true;
   const labels = [payload.tname, payload.tname_v2 ?? payload.tnameV2]
     .map((s) => String(s || ''))
     .join(' ');
@@ -815,12 +815,13 @@ function applyStudyRelated(payload, now) {
     typeof payload.studyRelated === 'boolean' ||
     payload.tid != null ||
     payload.tid_v2 != null ||
-    payload.tname ||
-    payload.tname_v2;
+    payload.tidV2 != null ||
+    Boolean(payload.tname) ||
+    Boolean(payload.tname_v2) ||
+    Boolean(payload.tnameV2);
   if (!hasHint) return;
   const related = isStudyRelatedPayload(payload);
   if (related && !studyClock.studyRelated) {
-   
     studyClock.lastAt = now;
   }
   studyClock.studyRelated = related;
@@ -959,6 +960,16 @@ function lockLocalSession(reason = 'locked') {
   console.log(`[bili-pet] local session locked (${reason})`);
 }
 
+function peekLocalWasMissing(uid) {
+  return !localDbExists(uid);
+}
+
+function mountAccountAndGate(uid, localWasMissing) {
+  const id = String(uid || '').trim();
+  if (id) setActiveUid(id);
+  setAccountOpsReady(!cloudEnabled() || !localWasMissing);
+}
+
 /** Mount DB + mark session live after extension proves a Bilibili uid. */
 function unlockLocalSession(uid, payload = {}) {
   const id = String(uid || '').trim();
@@ -997,11 +1008,10 @@ function unlockLocalSession(uid, payload = {}) {
     if (!gate.ok || !gate.uid) return { ok: false, error: gate.status };
 
     if (gate.status === 'auto_bound') {
-      setActiveUid(gate.uid);
-      // 云端开启时等首拉完成再放行；本地模式可立即用
-      setAccountOpsReady(!cloudEnabled());
+      const localWasMissing = peekLocalWasMissing(gate.uid);
+      mountAccountAndGate(gate.uid, localWasMissing);
       saveAccountSessionLoggedIn(gate.uid);
-      void ensureAccountLocalStore(gate, payload);
+      void ensureAccountLocalStore(gate, payload, { localWasMissing });
       return { ok: true, uid: gate.uid, status: gate.status };
     }
     if (gate.status === 'switched') {
@@ -1010,10 +1020,10 @@ function unlockLocalSession(uid, payload = {}) {
     }
     if (gate.status === 'logged_in') {
       accountOpSeq += 1; // cancel stale logout/purge from earlier false locks
-      setActiveUid(gate.uid);
-      setAccountOpsReady(!cloudEnabled());
+      const localWasMissing = peekLocalWasMissing(gate.uid);
+      mountAccountAndGate(gate.uid, localWasMissing);
       saveAccountSessionLoggedIn(gate.uid);
-      void ensureAccountLocalStore(gate, payload);
+      void ensureAccountLocalStore(gate, payload, { localWasMissing });
       return { ok: true, uid: gate.uid, status: gate.status };
     }
     return { ok: false, error: gate.status };
@@ -1024,11 +1034,12 @@ function unlockLocalSession(uid, payload = {}) {
     accountOpSeq += 1;
   }
   saveAccountSessionLoggedIn(id);
+  const localWasMissing = peekLocalWasMissing(id);
   if (!getActiveUid()) setActiveUid(id);
-  // 恢复会话：云端仍要走首拉门闩，勿提前 opsReady
+  // 本地已有该账号库：立刻放行；否则云端仍要走首拉门闩
   if (!wasLive) {
-    setAccountOpsReady(!cloudEnabled());
-  } else if (!isAccountOpsReady() && !cloudEnabled()) {
+    setAccountOpsReady(!cloudEnabled() || !localWasMissing);
+  } else if (!isAccountOpsReady() && (!cloudEnabled() || !localWasMissing)) {
     setAccountOpsReady(true);
   }
   if (!wasLive) {
@@ -1040,7 +1051,8 @@ function unlockLocalSession(uid, payload = {}) {
         prevUid: null,
         account: loadAccount(),
       },
-      payload
+      payload,
+      { localWasMissing }
     );
   } else {
     // Already live locally: still need cloud JWT if missing
@@ -1071,6 +1083,8 @@ function unlockLocalSession(uid, payload = {}) {
 }
 
 function enqueueLogoutPurge(reason) {
+  lastKbReadyCelebratedUid = null;
+  clearFirstPullCelebrated();
   const seq = ++accountOpSeq;
   const uidSnapshot =
     getActiveUid() || loadAccount().activeUid || loadAccount().boundUid || null;
@@ -1157,7 +1171,7 @@ async function flushAndPurgeActiveAccount(reason = 'logout_push') {
   return { ...result, keptLocal: true };
 }
 
-async function ensureAccountLocalStore(gate, payload = {}) {
+async function ensureAccountLocalStore(gate, payload = {}, { localWasMissing: localWasMissingArg } = {}) {
   if (!gate?.ok || !gate.uid) return;
   const switched = gate.status === 'switched';
   const autoBound = gate.status === 'auto_bound';
@@ -1194,6 +1208,8 @@ async function ensureAccountLocalStore(gate, payload = {}) {
     null;
   const uid = gate.uid;
   const prevUid = gate.prevUid || null;
+  const localWasMissing =
+    typeof localWasMissingArg === 'boolean' ? localWasMissingArg : peekLocalWasMissing(uid);
 
   const run = async () => {
     if (seq !== accountOpSeq) return;
@@ -1205,21 +1221,23 @@ async function ensureAccountLocalStore(gate, payload = {}) {
       latestEvent = null;
     }
 
-    // 主进程先广播，保证宠物立刻开跳舞（不依赖 cloud-sync 内部时序）
-    broadcastPetEvent(
-      {
-        v: 1,
-        source: 'bili-pet-sync',
-        kind: 'sync_state',
-        status: switched ? 'switching' : 'syncing_login',
-        ts: Date.now(),
-        uid,
-        prevUid,
-        switched,
-        cloudEnabled: cloudEnabled(),
-      },
-      { touchLatest: false }
-    );
+    if (localWasMissing) {
+      // 无本地库才提示拉取中；命中本地账号不广播 syncing_login
+      broadcastPetEvent(
+        {
+          v: 1,
+          source: 'bili-pet-sync',
+          kind: 'sync_state',
+          status: switched ? 'switching' : 'syncing_login',
+          ts: Date.now(),
+          uid,
+          prevUid,
+          switched,
+          cloudEnabled: cloudEnabled(),
+        },
+        { touchLatest: false }
+      );
+    }
 
     // 切号：立刻提交绑定与本地库挂载意图（旧号后台清）
     if (switched || autoBound) {
@@ -1236,6 +1254,7 @@ async function ensureAccountLocalStore(gate, payload = {}) {
       cookieHeader,
       opSeq: seq,
       isStale: () => seq !== accountOpSeq,
+      localWasMissing,
     });
 
     if (seq !== accountOpSeq) return;
@@ -1274,11 +1293,13 @@ async function ensureAccountLocalStore(gate, payload = {}) {
         switched,
         opsReady: Boolean(result.opsReady),
         pullError: result.pullError || null,
+        fromLocal: Boolean(result.fromLocal),
       },
       { touchLatest: false }
     );
 
     if (result.opsReady) {
+      const celebratePull = Boolean(result.celebrate);
       broadcastPetEvent(
         {
           v: 1,
@@ -1290,21 +1311,30 @@ async function ensureAccountLocalStore(gate, payload = {}) {
           switched,
           ok: true,
           dataPullDone: true,
+          fromLocal: Boolean(result.fromLocal),
+          pulled: Boolean(result.pulled),
+          celebrate: celebratePull,
         },
         { touchLatest: false }
       );
-      if (homeWindow && !homeWindow.isDestroyed()) {
-        try {
-          homeWindow.reload();
-        } catch (err) {
-          console.warn('[bili-pet] home reload after switch failed:', err?.message || err);
+      // 仅真正切号或本进程首次云端首拉成功时刷新窗口；同账号重复 ready 不再 reload
+      const shouldReload =
+        switched || (celebratePull && lastKbReadyCelebratedUid !== uid);
+      if (celebratePull) lastKbReadyCelebratedUid = uid;
+      if (shouldReload) {
+        if (homeWindow && !homeWindow.isDestroyed()) {
+          try {
+            homeWindow.reload();
+          } catch (err) {
+            console.warn('[bili-pet] home reload after switch failed:', err?.message || err);
+          }
         }
-      }
-      if (notesWindow && !notesWindow.isDestroyed()) {
-        try {
-          notesWindow.reload();
-        } catch (err) {
-          console.warn('[bili-pet] notes reload after switch failed:', err?.message || err);
+        if (notesWindow && !notesWindow.isDestroyed()) {
+          try {
+            notesWindow.reload();
+          } catch (err) {
+            console.warn('[bili-pet] notes reload after switch failed:', err?.message || err);
+          }
         }
       }
     }
@@ -1334,15 +1364,8 @@ function onBridgeEvent(payload) {
 
   if (kind === 'extension_heartbeat') {
     const uid = payload.account?.uid || payload.uid || null;
-    // 只有「心跳明确没有 UID」才当登出。cookieOk 只影响 B 站写接口，不能拿来锁本地库。
-    if (!uid) {
-      const hadLiveSession = Boolean(
-        loadAccount().sessionLoggedIn || getActiveUid()
-      );
-      lockLocalSession('heartbeat_no_uid');
-      if (hadLiveSession) {
-        enqueueLogoutPurge('heartbeat_logged_out_push');
-      }
+    // popup health probe 等无账号心跳：只续命，绝不当登出（否则会 clearBinding → 反复 auto_bound 首拉）
+    if (payload.probe === true || !uid) {
       return;
     }
 
@@ -1401,27 +1424,28 @@ function onBridgeEvent(payload) {
     }
 
     if (gate.ok && gate.uid && gate.status === 'auto_bound') {
-      setActiveUid(gate.uid);
-      setAccountOpsReady(!cloudEnabled());
+      const localWasMissing = peekLocalWasMissing(gate.uid);
+      mountAccountAndGate(gate.uid, localWasMissing);
       saveAccountSessionLoggedIn(gate.uid);
-      void ensureAccountLocalStore(gate, payload);
+      void ensureAccountLocalStore(gate, payload, { localWasMissing });
     } else if (gate.ok && gate.uid && gate.status === 'switched') {
       void ensureAccountLocalStore(gate, payload);
     } else if (gate.ok && gate.status === 'logged_in') {
       const wasLive =
         Boolean(loadAccount().sessionLoggedIn) && getActiveUid() === gate.uid;
       if (!wasLive) accountOpSeq += 1;
+      const localWasMissing = peekLocalWasMissing(gate.uid);
       if (!getActiveUid() && gate.uid) {
         setActiveUid(gate.uid);
       }
       if (!wasLive) {
-        setAccountOpsReady(!cloudEnabled());
-      } else if (!isAccountOpsReady() && !cloudEnabled()) {
+        setAccountOpsReady(!cloudEnabled() || !localWasMissing);
+      } else if (!isAccountOpsReady() && (!cloudEnabled() || !localWasMissing)) {
         setAccountOpsReady(true);
       }
       saveAccountSessionLoggedIn(gate.uid);
       if (!wasLive) {
-        void ensureAccountLocalStore(gate, payload);
+        void ensureAccountLocalStore(gate, payload, { localWasMissing });
       } else if (payload.cookieHeader) {
         void handleAuthCookiePayload(payload);
       }
@@ -1561,6 +1585,7 @@ ipcMain.handle('pet:gameAnswer', (_event, payload = {}) => {
     feedback: result?.feedback || '',
     error: result?.error || null,
     gameUi: result?.gameUi || null,
+    waitingMore: Boolean(result?.waitingMore || result?.gameUi?.waitingMore),
     autoClose: Boolean(result?.autoClose),
     endMessage: result?.endMessage || '',
     won: Boolean(result?.won),
@@ -1906,8 +1931,6 @@ ipcMain.handle('pet:notesSaveAsset', async (_event, payload = {}) => {
 });
 
 ipcMain.handle('pet:notesAssetDataUrl', (_event, payload = {}) => {
-  const bound = requireBoundAccount();
-  if (!bound.ok) return { ok: false, error: bound.error || 'not_bound' };
   try {
     const src = String(payload.src || payload.url || '');
     if (!src.startsWith('bilinotes://')) {
@@ -1992,7 +2015,7 @@ if (gotTheLock) {
     startCloudSync({
       onBroadcast: (event) => {
         broadcastPetEvent(event, { touchLatest: false });
-        // 首拉失败后重试成功：放行知识库并刷新已打开窗口
+        // 首拉失败后重试成功：放行知识库；仅真正拉到云端且尚未庆祝过时刷新窗口
         if (
           event?.kind === 'sync_state' &&
           event.status === 'ready' &&
@@ -2000,6 +2023,8 @@ if (gotTheLock) {
           event.dataPullDone &&
           event.retried
         ) {
+          const uid = String(event.uid || '');
+          const celebratePull = Boolean(event.pulled) && !event.fromLocal;
           broadcastPetEvent(
             {
               v: 1,
@@ -2010,21 +2035,31 @@ if (gotTheLock) {
               ok: true,
               retried: true,
               dataPullDone: true,
+              fromLocal: Boolean(event.fromLocal),
+              pulled: Boolean(event.pulled),
+              celebrate: celebratePull,
             },
             { touchLatest: false }
           );
-          if (homeWindow && !homeWindow.isDestroyed()) {
-            try {
-              homeWindow.reload();
-            } catch (err) {
-              console.warn('[bili-pet] home reload after pull retry failed:', err?.message || err);
+          if (
+            celebratePull &&
+            uid &&
+            lastKbReadyCelebratedUid !== uid
+          ) {
+            lastKbReadyCelebratedUid = uid;
+            if (homeWindow && !homeWindow.isDestroyed()) {
+              try {
+                homeWindow.reload();
+              } catch (err) {
+                console.warn('[bili-pet] home reload after pull retry failed:', err?.message || err);
+              }
             }
-          }
-          if (notesWindow && !notesWindow.isDestroyed()) {
-            try {
-              notesWindow.reload();
-            } catch (err) {
-              console.warn('[bili-pet] notes reload after pull retry failed:', err?.message || err);
+            if (notesWindow && !notesWindow.isDestroyed()) {
+              try {
+                notesWindow.reload();
+              } catch (err) {
+                console.warn('[bili-pet] notes reload after pull retry failed:', err?.message || err);
+              }
             }
           }
         }
@@ -2053,13 +2088,13 @@ if (gotTheLock) {
         );
         return;
       }
-      // 扩展掉线 = 软登出：推云 + 清库；恢复后须重新证明登录
-      const hadLiveSession = Boolean(
-        loadAccount().sessionLoggedIn || getActiveUid()
-      );
+      // 扩展掉线 = 软锁会话（卸挂载），保留 boundUid；后台只推云，不 clearBinding
+      // 否则恢复时会被当成 auto_bound，反复走 onAccountReady / 窗口 reload / 拉取完成提示
+      const uidSnapshot =
+        getActiveUid() || loadAccount().activeUid || loadAccount().boundUid || null;
       lockLocalSession('extension_offline');
-      if (hadLiveSession) {
-        enqueueLogoutPurge('extension_offline_push');
+      if (uidSnapshot) {
+        scheduleBackgroundPurge(uidSnapshot, 'extension_offline_push');
       }
       broadcastPetEvent(
         {
@@ -2073,7 +2108,7 @@ if (gotTheLock) {
         },
         { touchLatest: false }
       );
-      console.log('[bili-pet] extension offline — soft logout (push+purge)');
+      console.log('[bili-pet] extension offline — soft lock (keep binding, background push)');
     });
     const presenceTimer = setInterval(() => {
       pollExtensionPresence();

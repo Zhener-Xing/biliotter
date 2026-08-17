@@ -6,6 +6,9 @@ const {
   loadNoteDoc,
   saveNoteDoc,
   deleteNoteDoc,
+  listTrashNotes,
+  restoreNoteFromTrash,
+  purgeNoteFromTrash,
   searchNotes,
   listCourseGroups,
   getCourseGroup,
@@ -23,9 +26,10 @@ const {
   listStudyActivity,
   getStudyDay,
   getActiveUid,
-  getAssetsDir,
+  resolveNoteAssetFile,
+  relinkOrphanNoteAssets,
 } = require('../notes-db');
-const { generateCourseMindmap } = require('../course-mindmap');
+const { generateCourseMindmap, expandMindmapNode } = require('../course-mindmap');
 const { loadAccount } = require('../account-bind');
 const { isExtensionAlive } = require('../extension-presence');
 const { isAccountOpsReady, gateMessage } = require('../session-gate');
@@ -140,11 +144,46 @@ function serveStatic(req, res, urlPath) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+function serveNoteAsset(req, res, urlPath) {
+  const assetMatch = urlPath.match(/^\/api\/notes-assets\/([^/]+)\/([^/]+)$/);
+  if (req.method !== 'GET' || !assetMatch) return false;
+  const bvid = decodeURIComponent(assetMatch[1]);
+  const file = decodeURIComponent(assetMatch[2]);
+  if (
+    !bvid ||
+    !file ||
+    bvid.includes('..') ||
+    file.includes('..') ||
+    file.includes('/') ||
+    file.includes('\\')
+  ) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return true;
+  }
+  const full = resolveNoteAssetFile(bvid, file);
+  if (!full) {
+    res.writeHead(404);
+    res.end('Not found');
+    return true;
+  }
+  const ext = path.extname(full).toLowerCase();
+  res.writeHead(200, {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Cache-Control': 'no-cache',
+  });
+  fs.createReadStream(full).pipe(res);
+  return true;
+}
+
 async function handleApi(req, res, urlPath) {
   if (req.method === 'GET' && urlPath === '/api/status') {
     sendJson(res, 200, { ok: true, service: 'bili-pet-home' });
     return;
   }
+
+  // 本地截图文件不走登录/同步门闩，否则知识库里图片会整页裂开
+  if (serveNoteAsset(req, res, urlPath)) return;
 
   const bound = requireBoundAccount();
   if (!bound.ok) {
@@ -179,6 +218,11 @@ async function handleApi(req, res, urlPath) {
   }
 
   if (req.method === 'GET' && urlPath === '/api/notes') {
+    try {
+      relinkOrphanNoteAssets();
+    } catch {
+      /* ignore */
+    }
     sendJson(res, 200, { ok: true, notes: listNoteDocs() });
     return;
   }
@@ -192,37 +236,37 @@ async function handleApi(req, res, urlPath) {
     return;
   }
 
-  const assetMatch = urlPath.match(/^\/api\/notes-assets\/([^/]+)\/([^/]+)$/);
-  if (req.method === 'GET' && assetMatch) {
-    const bvid = decodeURIComponent(assetMatch[1]);
-    const file = decodeURIComponent(assetMatch[2]);
-    if (
-      !bvid ||
-      !file ||
-      bvid.includes('..') ||
-      file.includes('..') ||
-      file.includes('/') ||
-      file.includes('\\')
-    ) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
-    }
-    const assetsRoot = getAssetsDir();
-    const full = path.normalize(path.join(assetsRoot, bvid, file));
-    const root = path.normalize(assetsRoot + path.sep);
-    if (!full.startsWith(root) || !fs.existsSync(full) || fs.statSync(full).isDirectory()) {
-      res.writeHead(404);
-      res.end('Not found');
-      return;
-    }
-    const ext = path.extname(full).toLowerCase();
-    res.writeHead(200, {
-      'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-    });
-    fs.createReadStream(full).pipe(res);
+  if (req.method === 'GET' && urlPath === '/api/notes-trash') {
+    sendJson(res, 200, { ok: true, notes: listTrashNotes() });
     return;
+  }
+
+  const trashMatch = urlPath.match(/^\/api\/notes-trash\/([^/]+)\/(restore|purge)$/);
+  if (trashMatch) {
+    const bvid = decodeURIComponent(trashMatch[1]);
+    const action = trashMatch[2];
+    if (req.method === 'POST' && action === 'restore') {
+      const result = restoreNoteFromTrash(bvid);
+      if (!result.ok) {
+        sendJson(res, result.error === 'not_found' ? 404 : 400, {
+          ok: false,
+          message:
+            result.error === 'not_found' ? '废纸篓里没有这篇笔记' : result.error || '恢复失败',
+        });
+        return;
+      }
+      sendJson(res, 200, { ok: true, doc: result.doc, bvid: result.bvid });
+      return;
+    }
+    if (req.method === 'POST' && action === 'purge') {
+      const result = purgeNoteFromTrash(bvid);
+      if (!result.ok) {
+        sendJson(res, 400, { ok: false, message: result.error || '清除失败' });
+        return;
+      }
+      sendJson(res, 200, { ok: true, purged: result.purged, bvid: result.bvid });
+      return;
+    }
   }
 
   const noteMatch = urlPath.match(/^\/api\/notes\/([^/]+)$/);
@@ -265,7 +309,12 @@ async function handleApi(req, res, urlPath) {
         sendJson(res, 404, { ok: false, message: '笔记不存在' });
         return;
       }
-      sendJson(res, 200, { ok: true, bvid: result.bvid });
+      sendJson(res, 200, {
+        ok: true,
+        bvid: result.bvid,
+        trashed: Boolean(result.trashed),
+        message: result.trashed ? '已移入废纸篓' : '已删除',
+      });
       return;
     }
   }
@@ -493,32 +542,108 @@ async function handleApi(req, res, urlPath) {
   }
 
   const courseMindmapMatch = urlPath.match(
-    /^\/api\/course-groups\/([^/]+)\/mindmap(?:\/(generate))?$/
+    /^\/api\/course-groups\/([^/]+)\/mindmap(?:\/(generate|expand))?$/
   );
   if (courseMindmapMatch) {
     const groupId = decodeURIComponent(courseMindmapMatch[1]);
     const action = courseMindmapMatch[2] || '';
 
-    if (action === 'generate' && req.method === 'POST') {
-      await readBody(req);
+    if (action === 'expand' && req.method === 'POST') {
       try {
-        const result = await generateCourseMindmap(groupId);
+        const body = await readBody(req);
+        const data = body ? JSON.parse(body || '{}') : {};
+        const result = await expandMindmapNode(groupId, {
+          path: data.path,
+          topic: data.topic,
+          existingChildren:
+            data.existingChildren || data.existing || data.children,
+        });
         if (!result.ok) {
           const map = {
             not_found: '课程组不存在',
-            no_items: '课程组还没有视频',
-            no_chunks: '组内笔记尚无切块，请先写笔记',
             no_id: '课程组无效',
+            no_node: '请先选中要展开的节点',
+            no_chunks: '找不到相关笔记切块，请先写笔记',
+            no_new_children: '没有可新增的细节',
+            llm_failed: 'AI 展开失败',
+            llm_empty: 'AI 未返回可新增的子节点',
           };
-          sendJson(res, result.error === 'not_found' ? 404 : 400, {
+          const status =
+            result.error === 'not_found'
+              ? 404
+              : result.error === 'llm_failed' || result.error === 'llm_empty'
+                ? 502
+                : 400;
+          sendJson(res, status, {
             ok: false,
-            message: result.message || map[result.error] || result.error || '生成失败',
+            error: result.error,
+            message: result.message || map[result.error] || '展开失败',
           });
           return;
         }
         sendJson(res, 200, result);
       } catch (err) {
-        sendJson(res, 500, { ok: false, message: String(err.message || err) });
+        sendJson(res, 500, {
+          ok: false,
+          message: String(err.message || err),
+        });
+      }
+      return;
+    }
+
+    if (action === 'generate' && req.method === 'POST') {
+      try {
+        const body = await readBody(req);
+        const data = body ? JSON.parse(body || '{}') : {};
+        const mergePrevious = Boolean(
+          data.mergePrevious || data.merge || data.mode === 'merge'
+        );
+        const mode =
+          data.mode === 'ai' ||
+          data.mode === 'llm' ||
+          data.mode === 'merge' ||
+          mergePrevious
+            ? 'ai'
+            : 'structure';
+        const result = await generateCourseMindmap(groupId, {
+          mergePrevious,
+          mode,
+          mindmapMd: data.mindmapMd || data.mindmap_md || data.previousMindmapMd,
+        });
+        if (!result.ok) {
+          const map = {
+            not_found: '课程组不存在',
+            no_items: '课程组还没有文件夹或笔记',
+            no_chunks: '组内笔记尚无切块，请先写笔记',
+            no_id: '课程组无效',
+            empty_structure: '没有可生成的结构节点',
+            llm_failed: 'AI 生成失败，本次未覆盖原导图',
+            llm_empty: 'AI 未返回可用导图，本次未覆盖原导图',
+            llm_too_thin: '生成结果过少，本次未覆盖原导图',
+          };
+          const status =
+            result.error === 'not_found'
+              ? 404
+              : result.error === 'llm_failed' ||
+                  result.error === 'llm_empty' ||
+                  result.error === 'llm_too_thin'
+                ? 502
+                : 400;
+          sendJson(res, status, {
+            ok: false,
+            error: result.error,
+            message: result.message || map[result.error] || result.error || '生成失败',
+            unchanged: true,
+          });
+          return;
+        }
+        sendJson(res, 200, result);
+      } catch (err) {
+        sendJson(res, 500, {
+          ok: false,
+          message: String(err.message || err),
+          unchanged: true,
+        });
       }
       return;
     }
@@ -737,15 +862,7 @@ async function startHomeServer() {
   } catch (err) {
     if (!err || err.code !== 'EADDRINUSE') throw err;
 
-    // 端口被占：先探测是否已有可用服务；否则清残留再重试一次
-    if (await probeHomeServer()) {
-      console.warn(
-        `[bili-pet] home port ${PORT} already in use; reusing existing server`
-      );
-      homeServer = { external: true, close: (cb) => cb && cb() };
-      return homeServer;
-    }
-
+    // 端口被占：清掉残留进程再绑到当前代码，避免一直复用旧服务导致图片 401/404
     freeHomePort();
     await new Promise((r) => setTimeout(r, 350));
     try {

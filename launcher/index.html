@@ -36,11 +36,23 @@
 
       * { box-sizing: border-box; margin: 0; padding: 0; }
 
-      html, body { height: 100%; overflow: hidden; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
 
       body {
         font-family: var(--font-ui);
         color: var(--ink);
+        background: var(--panel);
+      }
+
+      /* 铺满窗口：避免用 vw/vh 居中卡片，拖拽缩放时整页变形、叠在一起 */
+      .shell {
+        width: 100%;
+        height: 100%;
+        border: 4px solid var(--line);
         background:
           repeating-linear-gradient(
             0deg,
@@ -51,19 +63,11 @@
           ),
           linear-gradient(180deg, var(--paper), var(--paper-2));
         display: grid;
-        place-items: center;
-      }
-
-      .shell {
-        width: min(1100px, calc(100vw - 32px));
-        height: min(720px, calc(100vh - 32px));
-        border: 4px solid var(--line);
-        box-shadow: var(--shadow);
-        background: var(--panel);
-        display: grid;
-        grid-template-columns: minmax(260px, 320px) 1fr;
+        grid-template-columns: minmax(240px, 300px) 1fr;
+        grid-template-rows: minmax(0, 1fr);
         overflow: hidden;
-        image-rendering: pixelated;
+        min-width: 0;
+        min-height: 0;
       }
 
       /* —— 左侧目录 —— */
@@ -72,7 +76,9 @@
         border-right: 4px solid var(--line);
         display: flex;
         flex-direction: column;
+        min-width: 0;
         min-height: 0;
+        overflow: hidden;
       }
 
       .brand {
@@ -163,6 +169,7 @@
       .course-mm-map,
       .course-mm-editor,
       .edit-split,
+      .code-fence-pop,
       .preview-body,
       .activity-card {
         -webkit-app-region: no-drag;
@@ -315,22 +322,82 @@
         padding: 0 10px 14px;
       }
 
+      .list-meta-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 14px 8px;
+        flex-shrink: 0;
+      }
+
+      .list-meta-row .list-meta {
+        flex: 1;
+        padding: 0;
+        min-width: 0;
+      }
+
+      .list-meta-row .btn-select-mode {
+        appearance: none;
+        border: 2px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        font: inherit;
+        font-size: 12px;
+        padding: 4px 10px;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      .list-meta-row .btn-select-mode:hover {
+        background: #f0e4d4;
+      }
+
+      .list-meta-row .btn-select-mode.is-on {
+        background: var(--slot);
+        color: var(--accent-ink);
+      }
+
+      .note-row {
+        display: flex;
+        align-items: stretch;
+        gap: 8px;
+        margin-bottom: 10px;
+        opacity: 0;
+        transform: translateY(10px);
+        animation: stagger-in 0.35s ease forwards;
+      }
+
+      .note-check {
+        display: none;
+        flex-shrink: 0;
+        width: 22px;
+        margin-top: 14px;
+        accent-color: var(--accent, #b07a45);
+        cursor: pointer;
+      }
+
+      .note-list.select-mode .note-check {
+        display: block;
+      }
+
       .note-item {
         appearance: none;
-        width: 100%;
+        flex: 1;
+        min-width: 0;
         text-align: left;
         border: 3px solid var(--line);
         background: var(--slot-empty);
         color: var(--ink);
         font: inherit;
         padding: 12px;
-        margin-bottom: 10px;
         cursor: pointer;
         box-shadow: var(--shadow-soft);
         transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
-        opacity: 0;
-        transform: translateY(10px);
-        animation: stagger-in 0.35s ease forwards;
+      }
+
+      .note-row.is-selected .note-item {
+        background: #f0e4d4;
+        box-shadow: 4px 4px 0 var(--line);
       }
 
       .note-item:hover {
@@ -345,6 +412,86 @@
       }
 
       .note-item.active .note-sub { color: rgba(255, 248, 240, 0.85); }
+
+      .notes-batch-bar {
+        display: none;
+        flex-shrink: 0;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 8px 12px;
+        border-top: 3px solid var(--line);
+        background: #f7efe4;
+      }
+
+      .notes-batch-bar.show {
+        display: flex;
+      }
+
+      .notes-batch-bar .batch-count {
+        flex: 1;
+        min-width: 4em;
+        font-size: 13px;
+        color: var(--ink);
+      }
+
+      .notes-batch-bar .btn {
+        font-size: 12px;
+        padding: 6px 10px;
+      }
+
+      .pane-trash {
+        padding: 18px 20px 24px;
+        overflow: auto;
+      }
+
+      .trash-list {
+        list-style: none;
+        margin: 12px 0 0;
+        padding: 0;
+      }
+
+      .trash-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        box-shadow: var(--shadow-soft);
+        padding: 12px 14px;
+        margin-bottom: 10px;
+      }
+
+      .trash-item-body {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .trash-item-title {
+        font-size: 16px;
+        color: var(--ink);
+        word-break: break-word;
+      }
+
+      .trash-item-sub {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--muted);
+        font-family: var(--font-body);
+      }
+
+      .trash-item-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .trash-item-actions .btn {
+        font-size: 12px;
+        padding: 5px 10px;
+        white-space: nowrap;
+      }
 
       .note-title {
         font-size: 16px;
@@ -825,6 +972,7 @@
         flex-direction: column;
         min-width: 0;
         min-height: 0;
+        overflow: hidden;
         background: var(--panel);
       }
 
@@ -1257,95 +1405,14 @@
         overflow: hidden;
       }
 
-      #course-mm-svg {
+      #course-mm-elixir {
         width: 100%;
         height: 100%;
-        display: block;
-        cursor: grab;
-        touch-action: none;
+        min-height: 240px;
       }
 
-      #course-mm-svg:active {
-        cursor: grabbing;
-      }
-
-      #course-mm-svg .mm-pan-hit {
-        pointer-events: all;
-        fill: transparent;
-      }
-
-      #course-mm-svg .markmap-foreign {
-        cursor: text;
-      }
-
-      #course-mm-svg .markmap-node.mm-selected > circle {
-        stroke-width: 3px;
-        filter: drop-shadow(0 0 3px rgba(196, 92, 38, 0.55));
-      }
-
-      #course-mm-svg .markmap-node.mm-selected .markmap-foreign > div > div {
-        outline: 2px solid var(--accent, #c45c26);
-        outline-offset: 2px;
-        border-radius: 4px;
-        background: rgba(255, 236, 210, 0.85);
-      }
-
-      .mm-inline-edit {
-        position: absolute;
-        z-index: 6;
-        min-width: 120px;
-        max-width: 280px;
-        padding: 6px 8px;
-        font: 14px/1.35 var(--font-ui, system-ui, sans-serif);
-        color: var(--ink);
-        border: 2px solid var(--accent, #c45c26);
-        border-radius: 8px;
-        background: #fffdf8;
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
-        outline: none;
-      }
-
-      .mm-ctx {
-        position: fixed;
-        z-index: 40;
-        min-width: 148px;
-        padding: 6px;
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        background: #fffdf8;
-        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
-        display: none;
-      }
-
-      .mm-ctx.open {
-        display: block;
-      }
-
-      .mm-ctx button {
-        display: block;
-        width: 100%;
-        text-align: left;
-        border: 0;
-        background: transparent;
-        padding: 8px 10px;
-        border-radius: 7px;
-        font: 13px/1.3 var(--font-ui, system-ui, sans-serif);
-        color: var(--ink);
-        cursor: pointer;
-      }
-
-      .mm-ctx button:hover {
-        background: rgba(196, 92, 38, 0.1);
-      }
-
-      .mm-ctx button.danger {
-        color: #a33;
-      }
-
-      .mm-ctx .mm-ctx-sep {
-        height: 1px;
-        margin: 4px 6px;
-        background: var(--line);
+      #course-mm-elixir .map-container {
+        background-color: transparent;
       }
 
       .course-mm-hint {
@@ -1356,6 +1423,64 @@
         font-size: 11px;
         color: var(--muted);
         pointer-events: none;
+      }
+
+      .mm-ctx {
+        position: fixed;
+        z-index: 80;
+        min-width: 148px;
+        padding: 6px;
+        border: 3px solid var(--line);
+        border-radius: 0;
+        background: var(--panel);
+        box-shadow: var(--shadow-soft);
+        display: none;
+        flex-direction: column;
+        gap: 4px;
+        font-family: var(--font-ui);
+      }
+
+      .mm-ctx.show {
+        display: flex;
+      }
+
+      .mm-ctx button {
+        appearance: none;
+        border: 2px solid transparent;
+        background: transparent;
+        color: var(--ink);
+        text-align: left;
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 14px;
+        cursor: pointer;
+        line-height: 1.2;
+      }
+
+      .mm-ctx button:hover,
+      .mm-ctx button:focus-visible {
+        outline: none;
+        border-color: var(--line);
+        background: var(--hit);
+      }
+
+      .mm-ctx button.danger {
+        color: var(--danger);
+      }
+
+      .mm-ctx button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      .mm-ctx .mm-ctx-sep {
+        height: 2px;
+        margin: 2px 4px;
+        background: var(--paper-2);
+      }
+
+      #course-mm-elixir me-tpc {
+        font-family: var(--font-ui) !important;
       }
 
       @media (max-width: 900px) {
@@ -1395,20 +1520,115 @@
         padding: 0.05em 0.28em;
       }
 
+      .md-body .code-block {
+        margin: 0 0 0.8em;
+        border: 3px solid var(--line);
+        box-shadow: 2px 2px 0 var(--line);
+        background: var(--panel);
+        overflow: hidden;
+      }
+
+      .md-body .code-block-head {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        padding: 8px 12px;
+        background: var(--paper-2);
+        border-bottom: 2px solid var(--line);
+        font-family: var(--font-body);
+      }
+
+      .md-body .code-block-lang {
+        flex-shrink: 0;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--accent-deep);
+      }
+
+      .md-body .code-block-caption {
+        flex: 1;
+        min-width: 0;
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .md-body .code-block pre,
       .md-body pre {
-        background: #2c2118;
-        color: #f4ebe0;
+        background: var(--rail);
+        color: var(--ink);
         border: 3px solid var(--line);
         padding: 10px 12px;
         overflow: auto;
         margin: 0 0 0.8em;
       }
 
-      .md-body pre code {
+      .md-body .code-block pre {
+        margin: 0;
+        border: 0;
+      }
+
+      .md-body pre code,
+      .md-body .code-block pre code {
         background: transparent;
         border: 0;
         padding: 0;
         color: inherit;
+        white-space: pre;
+      }
+
+      .code-fence-pop {
+        display: none;
+        position: absolute;
+        z-index: 50;
+        left: 24px;
+        top: 120px;
+        width: min(320px, calc(100% - 48px));
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+        border: 3px solid var(--line);
+        background: var(--panel);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .code-fence-pop.show {
+        display: flex;
+      }
+
+      .code-fence-pop-title {
+        font-size: 14px;
+        font-weight: 700;
+        margin: 0;
+      }
+
+      .code-fence-pop label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .code-fence-pop input,
+      .code-fence-pop select {
+        width: 100%;
+        border: 3px solid var(--line);
+        background: var(--slot-empty);
+        color: var(--ink);
+        font: inherit;
+        font-size: 13px;
+        padding: 8px 10px;
+        outline: none;
+      }
+
+      .code-fence-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
       }
 
       .md-body img {
@@ -1492,11 +1712,10 @@
 
       .shell { position: relative; }
 
-      @media (max-width: 820px) {
+      /* 桌面知识库保持左右分栏；窄窗只收窄侧栏，避免上下堆叠把内容糊在一起 */
+      @media (max-width: 900px) {
         .shell {
-          grid-template-columns: 1fr;
-          grid-template-rows: minmax(220px, 38%) 1fr;
-          height: min(100vh - 16px, 900px);
+          grid-template-columns: minmax(200px, 240px) 1fr;
         }
         .sidebar { border-right: 0; border-bottom: 4px solid var(--line); }
         .edit-split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
@@ -1537,9 +1756,24 @@
             <div id="hits-list"></div>
           </div>
 
-          <div class="list-meta" id="list-count">共 0 条</div>
+          <div class="list-meta-row">
+            <div class="list-meta" id="list-count">共 0 条</div>
+            <button type="button" class="btn-select-mode" id="btn-notes-select" title="多选笔记后批量加入或删除">
+              选择
+            </button>
+            <button type="button" class="btn-select-mode" id="btn-notes-trash" title="近 30 天删除的笔记，可恢复">
+              废纸篓
+            </button>
+          </div>
           <ul class="note-list" id="note-list"></ul>
           <p class="list-empty" id="list-empty" hidden>还没有笔记</p>
+          <div class="notes-batch-bar" id="notes-batch-bar">
+            <span class="batch-count" id="notes-batch-count">已选 0</span>
+            <button type="button" class="btn" id="btn-batch-all">全选</button>
+            <button type="button" class="btn primary" id="btn-batch-assign">加入课程组</button>
+            <button type="button" class="btn danger" id="btn-batch-delete">删除</button>
+            <button type="button" class="btn" id="btn-batch-done">完成</button>
+          </div>
         </div>
 
         <div class="side-panel" id="panel-courses">
@@ -1593,9 +1827,9 @@
         </div>
 
         <div class="main-toolbar" id="toolbar-course" hidden>
-          <button type="button" class="btn primary" id="btn-mm-generate">一键生成导图</button>
-          <button type="button" class="btn" id="btn-mm-add-child">添加子节点</button>
-          <button type="button" class="btn" id="btn-mm-add-sibling">添加同级</button>
+          <button type="button" class="btn primary" id="btn-mm-generate" title="按课程结构刷新大纲；保留你的修改与 AI 展开">一键生成导图</button>
+          <button type="button" class="btn" id="btn-mm-expand" title="选中节点后，仅在该节点下用 AI 补充细节">AI 展开</button>
+          <button type="button" class="btn" id="btn-mm-undo" title="撤销上一步">回退</button>
           <button type="button" class="btn" id="btn-mm-fit">适应画布</button>
           <button type="button" class="btn" id="btn-mm-save">保存</button>
           <span class="spacer"></span>
@@ -1605,6 +1839,12 @@
         <div class="main-toolbar" id="toolbar-activity" hidden>
           <button type="button" class="btn" id="btn-close-activity">关闭</button>
           <span class="spacer"></span>
+        </div>
+
+        <div class="main-toolbar" id="toolbar-trash" hidden>
+          <button type="button" class="btn" id="btn-close-trash">‹ 返回</button>
+          <span class="spacer"></span>
+          <span class="mm-status" id="trash-status">近 30 天可恢复</span>
         </div>
 
         <div class="pane" id="pane-welcome">
@@ -1688,7 +1928,7 @@
             <textarea
               class="body-input"
               id="body-input"
-              placeholder="Markdown 正文…"
+              placeholder="Markdown 正文… 输入 ``` 可选语言与介绍；Tab 缩进"
               spellcheck="true"
             ></textarea>
             <div class="md-body edit-preview" id="edit-preview" aria-label="预览"></div>
@@ -1732,32 +1972,70 @@
               placeholder="也可用 # / ## / ### 写大纲；或在右侧导图上直接双击编辑…"
             ></textarea>
             <div class="course-mm-map" id="course-mm-map">
-              <svg id="course-mm-svg"></svg>
-              <p class="course-mm-hint">双击改名 · 右键菜单 · 滚轮缩放 · 拖拽平移 · 点圆点折叠</p>
+              <div id="course-mm-elixir"></div>
+              <p class="course-mm-hint">拖节点改结构 · 右键菜单 · 选中后「AI 展开」· 双击改名</p>
             </div>
           </div>
         </div>
+
+        <div class="pane pane-trash" id="pane-trash" hidden>
+          <h2 class="doc-heading">废纸篓</h2>
+          <p class="doc-meta" id="trash-meta">删除后保留 30 天，可恢复；过期或「彻底删除」后不可恢复。</p>
+          <ul class="trash-list" id="trash-list"></ul>
+          <p class="list-empty" id="trash-empty" hidden>废纸篓是空的</p>
+        </div>
       </section>
 
-      <div class="mm-ctx" id="mm-ctx" role="menu" hidden>
-        <button type="button" data-mm-act="rename">重命名</button>
-        <button type="button" data-mm-act="add-child">添加子节点</button>
-        <button type="button" data-mm-act="add-sibling">添加同级节点</button>
-        <div class="mm-ctx-sep"></div>
-        <button type="button" class="danger" data-mm-act="delete">删除节点</button>
+      <div id="mm-ctx" class="mm-ctx" role="menu" hidden>
+        <button type="button" data-act="child" role="menuitem">添加子节点</button>
+        <button type="button" data-act="sibling" role="menuitem">添加同级</button>
+        <button type="button" data-act="expand" role="menuitem">AI 展开</button>
+        <div class="mm-ctx-sep" aria-hidden="true"></div>
+        <button type="button" data-act="undo" role="menuitem">回退</button>
+        <button type="button" data-act="remove" class="danger" role="menuitem">删除节点</button>
       </div>
 
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+      <div class="code-fence-pop" id="code-fence-pop">
+        <p class="code-fence-pop-title">代码块</p>
+        <label>
+          语言
+          <select id="code-lang">
+            <option value="">纯文本</option>
+            <option value="js" selected>JavaScript</option>
+            <option value="ts">TypeScript</option>
+            <option value="python">Python</option>
+            <option value="java">Java</option>
+            <option value="cpp">C / C++</option>
+            <option value="go">Go</option>
+            <option value="rust">Rust</option>
+            <option value="sql">SQL</option>
+            <option value="bash">Bash</option>
+            <option value="json">JSON</option>
+            <option value="html">HTML</option>
+            <option value="css">CSS</option>
+            <option value="markdown">Markdown</option>
+          </select>
+        </label>
+        <label>
+          简短介绍
+          <input id="code-caption" type="text" placeholder="可选，例如：二分查找模板" autocomplete="off" />
+        </label>
+        <div class="code-fence-actions">
+          <button type="button" class="btn primary" id="code-fence-ok">确定</button>
+          <button type="button" class="btn" id="code-fence-cancel">跳过</button>
+        </div>
+      </div>
     </div>
 
     <link rel="stylesheet" href="/notes-vendor/katex.min.css" />
+    <link rel="stylesheet" href="/vendor/mind-elixir/MindElixir.css" />
     <script src="/notes-vendor/marked.min.js"></script>
     <script src="/notes-vendor/purify.min.js"></script>
     <script src="/notes-vendor/katex.min.js"></script>
     <script src="/notes-vendor/auto-render.min.js"></script>
-    <script src="/vendor/markmap/d3.min.js"></script>
-    <script src="/vendor/markmap/markmap-lib.js"></script>
-    <script src="/vendor/markmap/markmap-view.js"></script>
+    <script src="/vendor/mind-elixir/MindElixir.iife.js"></script>
 
     <script>
       (function () {
@@ -1774,10 +2052,12 @@
         const paneEdit = document.getElementById("pane-edit");
         const paneAssignCourse = document.getElementById("pane-assign-course");
         const paneActivity = document.getElementById("pane-activity");
+        const paneTrash = document.getElementById("pane-trash");
         const toolbarPreview = document.getElementById("toolbar-preview");
         const toolbarEdit = document.getElementById("toolbar-edit");
         const toolbarAssign = document.getElementById("toolbar-assign");
         const toolbarActivity = document.getElementById("toolbar-activity");
+        const toolbarTrash = document.getElementById("toolbar-trash");
         const tabNotes = document.getElementById("tab-notes");
         const tabCourses = document.getElementById("tab-courses");
         const panelNotes = document.getElementById("panel-notes");
@@ -1802,15 +2082,18 @@
         const courseMmTitle = document.getElementById("course-mm-title");
         const courseMmMeta = document.getElementById("course-mm-meta");
         const courseMmEditor = document.getElementById("course-mm-editor");
-        const courseMmSvg = document.getElementById("course-mm-svg");
+        const courseMmHost = document.getElementById("course-mm-elixir");
         const mmStatus = document.getElementById("mm-status");
         const btnMmGenerate = document.getElementById("btn-mm-generate");
+        const btnMmExpand = document.getElementById("btn-mm-expand");
+        const btnMmUndo = document.getElementById("btn-mm-undo");
         const btnMmFit = document.getElementById("btn-mm-fit");
         const btnMmSave = document.getElementById("btn-mm-save");
-        const btnMmAddChild = document.getElementById("btn-mm-add-child");
-        const btnMmAddSibling = document.getElementById("btn-mm-add-sibling");
         const courseMmMap = document.getElementById("course-mm-map");
         const mmCtx = document.getElementById("mm-ctx");
+        let mmMeta = { excluded: [], structure: [], origins: {} };
+        const MM_PATH_SEP = "\x1f";
+        let mmOriginLock = null; // 'ai' | 'user' | null — 批量写入时锁定来源
 
         let allNotes = [];
         let allCourses = [];
@@ -1820,11 +2103,26 @@
         let expandedCourses = new Set();
         /** @type {Set<string>} */
         let expandedFolders = new Set();
+        /** @type {Set<string>} */
+        let selectedBvids = new Set();
+        /** 点「选择」后进入多选；勾选框仅在此模式下显示 */
+        let notesSelectMode = false;
+        /** 当前列表渲染用的笔记（搜索结果或全部） */
+        let visibleNotes = [];
+        /** 加入课程组待提交的 bvid 列表；空则用 activeBvid */
+        let assignTargetBvids = [];
         let activeBvid = null;
         let activeCourseId = null;
         let activeCourse = null;
         let addingCourseId = null;
         let addVideoMode = "bvid";
+        /**
+         * Electron 不支持 window.prompt；用侧栏内联表单代替。
+         * @type {null | { courseId: string, mode: 'create' | 'rename', folderId?: string, title?: string }}
+         */
+        let folderComposer = null;
+        /** @type {null | { courseId: string, title: string }} */
+        let courseRenameComposer = null;
         /** @type {null | { type: string, courseId: string }} */
         let noteReturnContext = null;
         let assignReturnMode = "preview";
@@ -1838,7 +2136,6 @@
         let searchTimer = null;
         let toastTimer = null;
         let mmInstance = null;
-        let mmTransformer = null;
         let mmRenderTimer = null;
         let mmSaveTimer = null;
         /** @type {"study" | "interrupt"} */
@@ -1858,11 +2155,7 @@
         const btnHeatInterrupt = document.getElementById("btn-heat-interrupt");
         let mmGenerating = false;
         let mmLoadedGroupId = null;
-        let mmSelectedNode = null;
-        let mmSelectedPath = null;
-        let mmInlineInput = null;
         let mmSkipEditorSync = false;
-        let mmFoldByPath = Object.create(null);
 
         function showToast(message) {
           toastEl.textContent = message;
@@ -1909,11 +2202,11 @@
         }
 
         function interruptLevel(count) {
+          // 分心/切屏：满 5 次才变红（记为 1 档），10 升级，20 深红
           const n = Number(count) || 0;
-          if (n <= 0) return 0;
-          if (n <= 15) return 1;
-          if (n <= 25) return 2;
-          if (n <= 34) return 3;
+          if (n < 5) return 0;
+          if (n < 25) return 1;
+          if (n < 100) return 2;
           return 4;
         }
 
@@ -2171,10 +2464,168 @@
             );
         }
 
+        function enhanceCodeBlocks(root) {
+          if (!root) return;
+          root.querySelectorAll("pre").forEach(function (pre) {
+            if (pre.closest(".code-block")) return;
+            const code = pre.querySelector("code");
+            const cls = (code && code.className) || "";
+            const langMatch = cls.match(/language-([\w#+-]+)/i);
+            const lang = langMatch ? langMatch[1] : "";
+            let caption = "";
+            const prev = pre.previousElementSibling;
+            if (prev && prev.tagName === "BLOCKQUOTE") {
+              caption = String(prev.textContent || "").trim();
+              prev.remove();
+            }
+            const wrap = document.createElement("div");
+            wrap.className = "code-block";
+            const head = document.createElement("div");
+            head.className = "code-block-head";
+            const langEl = document.createElement("span");
+            langEl.className = "code-block-lang";
+            langEl.textContent = lang || "text";
+            head.appendChild(langEl);
+            if (caption) {
+              const capEl = document.createElement("span");
+              capEl.className = "code-block-caption";
+              capEl.textContent = caption;
+              head.appendChild(capEl);
+            }
+            if (pre.parentNode) pre.parentNode.insertBefore(wrap, pre);
+            wrap.appendChild(head);
+            wrap.appendChild(pre);
+          });
+        }
+
+        function promoteFenceCaptions(md) {
+          const lines = String(md || "").split("\n");
+          const out = [];
+          let inFence = false;
+          for (let i = 0; i < lines.length; i += 1) {
+            const line = lines[i];
+            if (!inFence && /^```/.test(line)) {
+              const m = line.match(/^```([\w#+.]*)?(?:[ \t]+(.+))?$/);
+              if (m) {
+                const lang = m[1] || "";
+                const caption = String(m[2] || "").trim();
+                if (caption) out.push("> " + caption);
+                out.push("```" + lang);
+                inFence = true;
+                continue;
+              }
+            } else if (inFence && /^```\s*$/.test(line)) {
+              inFence = false;
+            }
+            out.push(line);
+          }
+          return out.join("\n");
+        }
+
+        function bindTabIndent(textarea, spaces) {
+          if (!textarea) return;
+          const n = Math.max(1, Number(spaces) || 2);
+          const pad = " ".repeat(n);
+          textarea.addEventListener("keydown", function (e) {
+            if (e.key !== "Tab" || e.isComposing) return;
+            e.preventDefault();
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            const val = textarea.value;
+            if (e.shiftKey) {
+              const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+              const block = val.slice(lineStart, end);
+              const next = block.replace(new RegExp("^ {1," + n + "}", "gm"), "");
+              textarea.value = val.slice(0, lineStart) + next + val.slice(end);
+              const removed = block.length - next.length;
+              textarea.setSelectionRange(
+                Math.max(lineStart, start - Math.min(n, start - lineStart)),
+                Math.max(lineStart, end - removed)
+              );
+            } else if (start !== end) {
+              const lineStart = val.lastIndexOf("\n", start - 1) + 1;
+              const block = val.slice(lineStart, end);
+              const next = block.replace(/^/gm, pad);
+              textarea.value = val.slice(0, lineStart) + next + val.slice(end);
+              textarea.setSelectionRange(start + n, end + (next.length - block.length));
+            } else {
+              textarea.value = val.slice(0, start) + pad + val.slice(end);
+              const pos = start + n;
+              textarea.setSelectionRange(pos, pos);
+            }
+            textarea.dispatchEvent(new Event("input", { bubbles: true }));
+          });
+        }
+
+        let fenceTriggerAt = null;
+        const codeFencePop = document.getElementById("code-fence-pop");
+        const codeCaptionEl = document.getElementById("code-caption");
+        const codeLangEl = document.getElementById("code-lang");
+
+        function hideFencePop() {
+          fenceTriggerAt = null;
+          if (codeFencePop) codeFencePop.classList.remove("show");
+        }
+
+        function openFencePop(at) {
+          fenceTriggerAt = at;
+          if (codeCaptionEl) codeCaptionEl.value = "";
+          if (codeLangEl) codeLangEl.value = "js";
+          if (bodyInput && codeFencePop) {
+            const rect = bodyInput.getBoundingClientRect();
+            const shell = document.getElementById("shell");
+            const shellRect = shell ? shell.getBoundingClientRect() : { left: 0, top: 0 };
+            codeFencePop.style.left = Math.max(12, rect.left - shellRect.left + 8) + "px";
+            codeFencePop.style.top = Math.max(12, rect.top - shellRect.top + 20) + "px";
+          }
+          if (codeFencePop) codeFencePop.classList.add("show");
+          setTimeout(function () {
+            if (codeLangEl) codeLangEl.focus();
+          }, 0);
+        }
+
+        function applyFenceMeta(opts) {
+          opts = opts || {};
+          if (fenceTriggerAt == null || !bodyInput) {
+            hideFencePop();
+            return;
+          }
+          const at = fenceTriggerAt;
+          const val = bodyInput.value;
+          if (val.slice(at, at + 3) !== "```") {
+            hideFencePop();
+            return;
+          }
+          let open = "```";
+          if (!opts.skipMeta) {
+            const lang = String((codeLangEl && codeLangEl.value) || "").trim();
+            const caption = String((codeCaptionEl && codeCaptionEl.value) || "").trim();
+            open = "```" + [lang, caption].filter(Boolean).join(" ");
+          }
+          const replacement = open + "\n\n```";
+          bodyInput.value = val.slice(0, at) + replacement + val.slice(at + 3);
+          const cursor = at + open.length + 1;
+          hideFencePop();
+          bodyInput.focus();
+          bodyInput.setSelectionRange(cursor, cursor);
+          bodyInput.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+
+        function maybeOpenFenceFromInput() {
+          if (!bodyInput) return;
+          if (codeFencePop && codeFencePop.classList.contains("show")) return;
+          const pos = bodyInput.selectionStart || 0;
+          const before = bodyInput.value.slice(0, pos);
+          if (!/(^|\n)```$/.test(before)) return;
+          const after = bodyInput.value.slice(pos);
+          if (/^[\w#+. \t]/.test(after)) return;
+          openFencePop(pos - 3);
+        }
+
         function renderMarkdownInto(el, md, opts) {
           if (!el) return;
           const withMath = !opts || opts.withMath !== false;
-          const source = rewriteNoteAssetUrls(md);
+          const source = promoteFenceCaptions(rewriteNoteAssetUrls(md));
           clearTimeout(mathTimer);
           mathTimer = null;
           try {
@@ -2189,7 +2640,42 @@
                       ALLOWED_URI_REGEXP:
                         /^(?:(?:(?:f|ht)tps?|mailto|tel|data):|\/api\/notes-assets\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
                     })
-                  : raw;
+                    : raw;
+            enhanceCodeBlocks(el);
+            el.querySelectorAll("img").forEach(function (img) {
+              const src = img.getAttribute("src") || "";
+              let bili = "";
+              if (src.indexOf("bilinotes://asset/") === 0) {
+                bili = src;
+              } else {
+                const httpMatch = src.match(/\/api\/notes-assets\/([^/]+)\/([^/?#]+)/);
+                if (httpMatch) {
+                  try {
+                    bili =
+                      "bilinotes://asset/" +
+                      decodeURIComponent(httpMatch[1]) +
+                      "/" +
+                      decodeURIComponent(httpMatch[2]);
+                  } catch (_) {
+                    bili = "bilinotes://asset/" + httpMatch[1] + "/" + httpMatch[2];
+                  }
+                }
+              }
+              if (!bili) return;
+              if (window.biliPet && typeof window.biliPet.notesAssetDataUrl === "function") {
+                window.biliPet.notesAssetDataUrl(bili).then(function (res) {
+                  if (res && res.ok && res.dataUrl) img.src = res.dataUrl;
+                });
+                return;
+              }
+              const m = bili.match(/^bilinotes:\/\/asset\/([^/]+)\/(.+)$/i);
+              if (!m) return;
+              img.src =
+                "/api/notes-assets/" +
+                encodeURIComponent(decodeURIComponent(m[1])) +
+                "/" +
+                encodeURIComponent(decodeURIComponent(m[2]));
+            });
             } else {
               el.textContent = source;
             }
@@ -2229,12 +2715,156 @@
           paneAssignCourse.hidden = next !== "assign-course";
           if (paneCourse) paneCourse.hidden = next !== "course";
           if (paneActivity) paneActivity.hidden = next !== "activity";
+          if (paneTrash) paneTrash.hidden = next !== "trash";
           toolbarPreview.hidden = next !== "preview";
           toolbarEdit.hidden = next !== "edit";
           toolbarAssign.hidden = next !== "assign-course";
           if (toolbarCourse) toolbarCourse.hidden = next !== "course";
           if (toolbarActivity) toolbarActivity.hidden = next !== "activity";
+          if (toolbarTrash) toolbarTrash.hidden = next !== "trash";
           if (next === "activity") loadActivityHeatmap();
+          if (next === "trash") void loadTrashList();
+        }
+
+        function openTrashView() {
+          if (notesSelectMode) setNotesSelectMode(false);
+          activeBvid = null;
+          activeCourseId = null;
+          activeCourse = null;
+          noteReturnContext = null;
+          setSideView("notes");
+          setMode("trash");
+        }
+
+        function closeTrashView() {
+          setMode("welcome");
+        }
+
+        function formatTrashTime(ts) {
+          const n = Number(ts) || 0;
+          if (!n) return "—";
+          try {
+            return new Date(n).toLocaleString();
+          } catch (_) {
+            return "—";
+          }
+        }
+
+        async function loadTrashList() {
+          const listEl = document.getElementById("trash-list");
+          const emptyEl = document.getElementById("trash-empty");
+          const metaEl = document.getElementById("trash-meta");
+          const statusEl = document.getElementById("trash-status");
+          if (!listEl) return;
+          try {
+            const data = await api("/api/notes-trash");
+            const notes = Array.isArray(data.notes) ? data.notes : [];
+            listEl.innerHTML = "";
+            if (emptyEl) {
+              emptyEl.hidden = notes.length > 0;
+              emptyEl.textContent =
+                notes.length > 0
+                  ? "废纸篓是空的"
+                  : "废纸篓是空的。删除的笔记会出现在这里；若刚删却没有，请完全退出并重启应用后再试。";
+            }
+            if (metaEl) {
+              metaEl.textContent =
+                notes.length > 0
+                  ? "共 " + notes.length + " 篇 · 删除后保留 30 天，可恢复"
+                  : "删除后保留 30 天，可恢复；过期或「彻底删除」后不可恢复。";
+            }
+            if (statusEl) {
+              statusEl.textContent =
+                notes.length > 0 ? "共 " + notes.length + " 篇可恢复" : "近 30 天可恢复";
+            }
+            notes.forEach(function (item) {
+              const li = document.createElement("li");
+              li.className = "trash-item";
+              const body = document.createElement("div");
+              body.className = "trash-item-body";
+              const title = document.createElement("div");
+              title.className = "trash-item-title";
+              title.textContent = item.title || item.bvid || "未命名";
+              const sub = document.createElement("div");
+              sub.className = "trash-item-sub";
+              sub.textContent =
+                (item.bvid || "") +
+                " · 删除于 " +
+                formatTrashTime(item.deletedAt) +
+                " · 约剩 " +
+                (item.daysLeft != null ? item.daysLeft : "?") +
+                " 天";
+              body.appendChild(title);
+              body.appendChild(sub);
+              if (item.preview) {
+                const prev = document.createElement("div");
+                prev.className = "trash-item-sub";
+                prev.textContent = item.preview;
+                body.appendChild(prev);
+              }
+              const actions = document.createElement("div");
+              actions.className = "trash-item-actions";
+              const btnRestore = document.createElement("button");
+              btnRestore.type = "button";
+              btnRestore.className = "btn primary";
+              btnRestore.textContent = "恢复";
+              btnRestore.addEventListener("click", function () {
+                void restoreTrashNote(item.bvid);
+              });
+              const btnPurge = document.createElement("button");
+              btnPurge.type = "button";
+              btnPurge.className = "btn danger";
+              btnPurge.textContent = "彻底删除";
+              btnPurge.addEventListener("click", function () {
+                void purgeTrashNote(item.bvid);
+              });
+              actions.appendChild(btnRestore);
+              actions.appendChild(btnPurge);
+              li.appendChild(body);
+              li.appendChild(actions);
+              listEl.appendChild(li);
+            });
+          } catch (err) {
+            if (emptyEl) {
+              emptyEl.hidden = false;
+              emptyEl.textContent = err.message || "无法读取废纸篓";
+            }
+            showToast(err.message || "废纸篓加载失败");
+          }
+        }
+
+        async function restoreTrashNote(bvid) {
+          try {
+            await api(
+              "/api/notes-trash/" + encodeURIComponent(bvid) + "/restore",
+              "POST",
+              {}
+            );
+            showToast("已恢复笔记");
+            await loadList();
+            await loadCourses();
+            await loadTrashList();
+          } catch (err) {
+            showToast(err.message || "恢复失败");
+          }
+        }
+
+        async function purgeTrashNote(bvid) {
+          const ok = window.confirm(
+            "彻底删除后无法恢复（含配图）。确定删除？\n" + bvid
+          );
+          if (!ok) return;
+          try {
+            await api(
+              "/api/notes-trash/" + encodeURIComponent(bvid) + "/purge",
+              "POST",
+              {}
+            );
+            showToast("已彻底删除");
+            await loadTrashList();
+          } catch (err) {
+            showToast(err.message || "清除失败");
+          }
         }
 
         function openActivityView() {
@@ -2253,68 +2883,213 @@
           if (mmStatus) mmStatus.textContent = text || "";
         }
 
-        function ensureMarkmap() {
-          if (mmTransformer && mmInstance) return true;
-          if (!window.markmap || !window.markmap.Transformer || !window.markmap.Markmap) {
-            setMmStatus("Markmap 脚本未加载");
-            return false;
-          }
-          if (!mmTransformer) mmTransformer = new window.markmap.Transformer();
-          return true;
+        function mmReadMetaList(md, kind) {
+          const key =
+            kind === "structure"
+              ? "bili-pet:mm-structure"
+              : "bili-pet:mm-excluded";
+          const re = new RegExp(
+            "<!--\\s*" + key + ":\\s*([\\s\\S]*?)-->",
+            "i"
+          );
+          const m = String(md || "").match(re);
+          if (!m) return [];
+          return String(m[1] || "")
+            .split("|")
+            .map(function (s) {
+              return s.trim();
+            })
+            .filter(Boolean);
         }
 
-        function mmNodePlainText(node) {
-          if (!node) return "";
-          const tmp = document.createElement("div");
-          tmp.innerHTML = String(node.content || "");
-          return String(tmp.textContent || "")
-            .replace(/\s+/g, " ")
+        function mmStripMetaComments(md) {
+          return String(md || "")
+            .replace(
+              /<!--\s*bili-pet:mm-(?:excluded|structure|meta):\s*[\s\S]*?-->/gi,
+              ""
+            )
             .trim();
         }
 
-        function mmEscapeText(text) {
-          return String(text || "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
+        function mmTakeMetaFromMd(md) {
+          const raw = String(md || "");
+          mmMeta = { excluded: [], structure: [], origins: {} };
+          const jm = raw.match(/<!--\s*bili-pet:mm-meta:\s*([\s\S]*?)-->/i);
+          if (jm) {
+            try {
+              const parsed = JSON.parse(String(jm[1] || "").trim());
+              if (parsed && typeof parsed === "object") {
+                if (Array.isArray(parsed.excluded)) {
+                  mmMeta.excluded = parsed.excluded
+                    .map(function (s) {
+                      return String(s || "").trim();
+                    })
+                    .filter(Boolean);
+                }
+                if (Array.isArray(parsed.structure)) {
+                  mmMeta.structure = parsed.structure
+                    .map(function (s) {
+                      return String(s || "").trim();
+                    })
+                    .filter(Boolean);
+                }
+                if (parsed.origins && typeof parsed.origins === "object") {
+                  Object.keys(parsed.origins).forEach(function (k) {
+                    const origin = String(parsed.origins[k] || "")
+                      .trim()
+                      .toLowerCase();
+                    if (
+                      origin === "structure" ||
+                      origin === "user" ||
+                      origin === "ai"
+                    ) {
+                      mmMeta.origins[k] = origin;
+                    }
+                  });
+                }
+              }
+            } catch (_) {
+              /* ignore */
+            }
+          }
+          mmReadMetaList(raw, "excluded").forEach(function (p) {
+            if (mmMeta.excluded.indexOf(p) < 0) mmMeta.excluded.push(p);
+          });
+          mmReadMetaList(raw, "structure").forEach(function (p) {
+            if (mmMeta.structure.indexOf(p) < 0) mmMeta.structure.push(p);
+          });
+          return mmStripMetaComments(raw);
         }
 
-        function mmTreeToMarkdown(node, depth) {
+        function mmAttachMeta(md) {
+          const body = mmStripMetaComments(md);
+          const payload = JSON.stringify({
+            v: 1,
+            excluded: (mmMeta.excluded || []).filter(Boolean),
+            structure: (mmMeta.structure || []).filter(Boolean),
+            origins: mmMeta.origins || {},
+          });
+          if (!body) return "<!-- bili-pet:mm-meta: " + payload + " -->\n";
+          return body + "\n<!-- bili-pet:mm-meta: " + payload + " -->\n";
+        }
+
+        function mmMarkOrigin(pathArr, origin) {
+          const key = (pathArr || [])
+            .map(function (s) {
+              return String(s || "").trim();
+            })
+            .filter(Boolean)
+            .join(MM_PATH_SEP);
+          if (!key) return;
+          const next = mmOriginLock || String(origin || "").toLowerCase();
+          const cur = mmMeta.origins[key];
+          if (cur === "user" && next !== "user") return;
+          if (next === "user" || next === "ai" || next === "structure") {
+            if (cur === "ai" && next === "structure") return;
+            mmMeta.origins[key] = next;
+          }
+        }
+
+        function mmMarkTreeOrigin(spec, parentPath, origin) {
+          const topic = String((spec && spec.topic) || "").trim();
+          if (!topic) return;
+          const path = (parentPath || []).concat([topic]);
+          mmMarkOrigin(path, origin);
+          const kids = (spec && spec.children) || [];
+          for (let i = 0; i < kids.length; i += 1) {
+            mmMarkTreeOrigin(kids[i], path, origin);
+          }
+        }
+
+        function getMindElixirCtor() {
+          const ns = window.MindElixir;
+          if (!ns) return null;
+          return typeof ns === "function" ? ns : ns.default || null;
+        }
+
+        function mmNewId() {
+          return (
+            Date.now().toString(16) + Math.random().toString(16).slice(2, 10)
+          ).slice(0, 16);
+        }
+
+        function markdownToElixir(md, fallbackTitle) {
+          const title =
+            String(fallbackTitle || "").trim() || "课程组";
+          const lines = String(md || "")
+            .replace(/\r\n/g, "\n")
+            .split("\n");
+          const stack = [];
+          let seq = 0;
+          function makeNode(topic) {
+            seq += 1;
+            return {
+              id: "n" + seq + "_" + mmNewId(),
+              topic: String(topic || "").trim() || "未命名",
+              expanded: true,
+              children: [],
+            };
+          }
+          for (let i = 0; i < lines.length; i += 1) {
+            const m = lines[i].match(/^(#{1,6})\s+(.*)$/);
+            if (!m) continue;
+            const level = m[1].length;
+            const node = makeNode(m[2]);
+            while (stack.length && stack[stack.length - 1].level >= level) {
+              stack.pop();
+            }
+            if (!stack.length) {
+              if (level !== 1) {
+                const root = makeNode(title);
+                stack.push({ level: 1, node: root });
+              }
+            }
+            if (!stack.length) {
+              stack.push({ level: level, node: node });
+              continue;
+            }
+            const parent = stack[stack.length - 1].node;
+            parent.children.push(node);
+            stack.push({ level: level, node: node });
+          }
+          const root = stack.length ? stack[0].node : makeNode(title);
+          if (!root.children) root.children = [];
+          return { nodeData: root };
+        }
+
+        function elixirNodeToMarkdown(node, depth) {
           if (!node) return "";
           const level = Math.max(0, Number(depth) || 0);
           const hashes = "#".repeat(Math.min(level + 1, 6));
-          const title = mmNodePlainText(node) || "未命名";
+          const title = String(node.topic || "").trim() || "未命名";
           const lines = [hashes + " " + title];
           const kids = Array.isArray(node.children) ? node.children : [];
           for (let i = 0; i < kids.length; i += 1) {
-            const part = mmTreeToMarkdown(kids[i], level + 1);
+            const part = elixirNodeToMarkdown(kids[i], level + 1);
             if (part) lines.push(part);
           }
           return lines.join("\n");
         }
 
-        function mmGetRoot() {
-          return mmInstance && mmInstance.state ? mmInstance.state.data : null;
-        }
-
-        function mmFindParent(root, target) {
-          if (!root || !target || root === target) return null;
-          const kids = Array.isArray(root.children) ? root.children : [];
-          for (let i = 0; i < kids.length; i += 1) {
-            if (kids[i] === target) return root;
-            const found = mmFindParent(kids[i], target);
-            if (found) return found;
-          }
-          return null;
+        function elixirToMarkdown(data) {
+          const root = data && data.nodeData ? data.nodeData : data;
+          if (!root) return "";
+          return elixirNodeToMarkdown(root, 0) + "\n";
         }
 
         function mmSyncEditorFromTree(opts) {
           opts = opts || {};
-          const root = mmGetRoot();
-          if (!root || !courseMmEditor) return "";
-          const md = mmTreeToMarkdown(root, 0) + "\n";
+          if (!mmInstance || !courseMmEditor) return "";
+          let data = null;
+          try {
+            data = mmInstance.getData();
+          } catch (_) {
+            return "";
+          }
+          const body = elixirToMarkdown(data);
+          const md = mmAttachMeta(body);
           mmSkipEditorSync = true;
-          courseMmEditor.value = md;
+          courseMmEditor.value = body;
           mmSkipEditorSync = false;
           if (activeCourseId && courseDetails[activeCourseId]) {
             courseDetails[activeCourseId].mindmapMd = md;
@@ -2323,386 +3098,217 @@
           return md;
         }
 
-        function mmClearSelection() {
-          if (courseMmSvg) {
-            courseMmSvg.querySelectorAll(".markmap-node.mm-selected").forEach(function (el) {
-              el.classList.remove("mm-selected");
-            });
+        function mmFitView() {
+          if (!mmInstance) return;
+          try {
+            if (typeof mmInstance.scaleFit === "function") mmInstance.scaleFit();
+            if (typeof mmInstance.toCenter === "function") mmInstance.toCenter();
+          } catch (_) {
+            /* ignore */
           }
-          mmSelectedNode = null;
-          mmSelectedPath = null;
         }
 
-        function mmSelectNode(node, el) {
-          mmClearSelection();
-          mmSelectedNode = node || null;
-          mmSelectedPath =
-            node && node.state && node.state.path != null ? String(node.state.path) : null;
-          if (el) el.classList.add("mm-selected");
-        }
-
-        function mmExpandAll(root) {
-          function walk(node) {
-            if (!node) return;
-            if (node.payload && node.payload.fold) {
-              node.payload = Object.assign({}, node.payload, { fold: 0 });
-            }
-            const kids = Array.isArray(node.children) ? node.children : [];
-            for (let i = 0; i < kids.length; i += 1) walk(kids[i]);
-          }
-          walk(root);
-        }
-
-        function mmFindByPath(root, path) {
-          if (!root || path == null || path === "") return null;
-          const want = String(path);
-          let hit = null;
-          function walk(node) {
-            if (!node || hit) return;
-            if (node.state && String(node.state.path) === want) {
-              hit = node;
-              return;
-            }
-            const kids = Array.isArray(node.children) ? node.children : [];
-            for (let i = 0; i < kids.length; i += 1) walk(kids[i]);
-          }
-          walk(root);
-          return hit;
-        }
-
-        function mmCloseContextMenu() {
+        function mmHideCtx() {
           if (!mmCtx) return;
-          mmCtx.classList.remove("open");
+          mmCtx.classList.remove("show");
           mmCtx.hidden = true;
         }
 
-        function mmOpenContextMenu(x, y) {
+        function mmShowCtx(clientX, clientY) {
           if (!mmCtx) return;
           mmCtx.hidden = false;
-          mmCtx.classList.add("open");
+          mmCtx.classList.add("show");
           const pad = 8;
-          const w = mmCtx.offsetWidth || 160;
-          const h = mmCtx.offsetHeight || 160;
-          const left = Math.min(x, window.innerWidth - w - pad);
-          const top = Math.min(y, window.innerHeight - h - pad);
-          mmCtx.style.left = Math.max(pad, left) + "px";
-          mmCtx.style.top = Math.max(pad, top) + "px";
+          const rect = mmCtx.getBoundingClientRect();
+          let left = clientX;
+          let top = clientY;
+          if (left + rect.width > window.innerWidth - pad) {
+            left = Math.max(pad, window.innerWidth - rect.width - pad);
+          }
+          if (top + rect.height > window.innerHeight - pad) {
+            top = Math.max(pad, window.innerHeight - rect.height - pad);
+          }
+          mmCtx.style.left = left + "px";
+          mmCtx.style.top = top + "px";
         }
 
-        function mmCancelInlineEdit(commit) {
-          if (!mmInlineInput) return;
-          const input = mmInlineInput;
-          const node = input._mmNode;
-          const value = String(input.value || "").trim();
-          mmInlineInput = null;
-          input.remove();
-          if (commit && node) {
-            const next = value || "未命名";
-            if (mmNodePlainText(node) !== next) {
-              node.content = mmEscapeText(next);
-              mmRefreshLiveTree("已改名 · 自动保存中");
-            }
+        function mmRememberExcludedFromNodes(nodes) {
+          const list = Array.isArray(nodes) ? nodes : nodes ? [nodes] : [];
+          for (let i = 0; i < list.length; i += 1) {
+            const obj = list[i] && (list[i].nodeObj || list[i]);
+            if (!obj) continue;
+            const path = mmCollectNodePath(obj).join(MM_PATH_SEP);
+            if (!path) continue;
+            if (mmMeta.excluded.indexOf(path) < 0) mmMeta.excluded.push(path);
           }
         }
 
-        function mmStartRename(node, anchorEl) {
-          if (!node || !courseMmMap) return;
-          mmCancelInlineEdit(false);
-          mmCloseContextMenu();
-          const input = document.createElement("input");
-          input.type = "text";
-          input.className = "mm-inline-edit";
-          input.value = mmNodePlainText(node);
-          input._mmNode = node;
-
-          const mapRect = courseMmMap.getBoundingClientRect();
-          let left = 24;
-          let top = 24;
-          if (anchorEl && typeof anchorEl.getBoundingClientRect === "function") {
-            const r = anchorEl.getBoundingClientRect();
-            left = Math.max(8, r.left - mapRect.left);
-            top = Math.max(8, r.top - mapRect.top - 4);
+        function mmUndo() {
+          if (!ensureMindElixir()) return;
+          if (typeof mmInstance.undo === "function") {
+            mmInstance.undo();
+            mmSyncEditorFromTree();
+            setMmStatus("已回退 · 自动保存中");
+          } else {
+            showToast("当前无法回退");
           }
-          input.style.left = left + "px";
-          input.style.top = top + "px";
-          courseMmMap.appendChild(input);
-          mmInlineInput = input;
-          input.focus();
-          input.select();
-
-          input.addEventListener("keydown", function (e) {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              mmCancelInlineEdit(true);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              mmCancelInlineEdit(false);
-            }
-            e.stopPropagation();
-          });
-          input.addEventListener("blur", function () {
-            setTimeout(function () {
-              if (mmInlineInput === input) mmCancelInlineEdit(true);
-            }, 0);
-          });
-          input.addEventListener("mousedown", function (e) {
-            e.stopPropagation();
-          });
         }
 
-        function mmRefreshLiveTree(message, opts) {
-          opts = opts || {};
-          const root = mmGetRoot();
-          if (!root || !mmInstance) return;
-          const md = mmTreeToMarkdown(root, 0) + "\n";
-          mmSkipEditorSync = true;
-          if (courseMmEditor) courseMmEditor.value = md;
-          mmSkipEditorSync = false;
-          if (activeCourseId && courseDetails[activeCourseId]) {
-            courseDetails[activeCourseId].mindmapMd = md;
+        function ensureMindElixir() {
+          if (mmInstance) return true;
+          const Ctor = getMindElixirCtor();
+          if (!Ctor || !courseMmHost) {
+            setMmStatus("Mind Elixir 脚本未加载");
+            return false;
           }
-          try {
-            // 编辑时不动画、强制展开，避免子节点被收回
-            if (typeof mmInstance.setOptions === "function") {
-              mmInstance.setOptions({
-                initialExpandLevel: -1,
-                duration: 0,
-              });
-            }
-            mmExpandAll(root);
-            mmInstance.setData(root);
-          } catch (err) {
-            console.warn("[mindmap] setData", err);
-            renderCourseMindmap(md, { skipFit: true });
-            return;
-          }
-          requestAnimationFrame(function () {
-            bindMindmapEditHandlers();
-            const liveRoot = mmGetRoot();
-            let want = opts.renameNode || null;
-            if (!want && mmSelectedPath) want = mmFindByPath(liveRoot, mmSelectedPath);
-            if (want || opts.renameNode) {
-              const targetText = want ? mmNodePlainText(want) : "";
-              const nodes = courseMmSvg.querySelectorAll("g.markmap-node");
-              let hit = null;
-              for (let i = 0; i < nodes.length; i += 1) {
-                const g = nodes[i];
-                const datum = window.d3.select(g).datum();
-                if (!datum) continue;
-                if (
-                  (want && datum === want) ||
-                  (mmSelectedPath &&
-                    datum.state &&
-                    String(datum.state.path) === String(mmSelectedPath)) ||
-                  (opts.renameNode &&
-                    targetText &&
-                    mmNodePlainText(datum) === targetText)
-                ) {
-                  hit = { g: g, datum: datum };
-                  if (want && datum === want) break;
-                }
-              }
-              if (!hit && opts.renameNode) {
-                for (let i = nodes.length - 1; i >= 0; i -= 1) {
-                  const g = nodes[i];
-                  const datum = window.d3.select(g).datum();
-                  if (datum && mmNodePlainText(datum) === "新节点") {
-                    hit = { g: g, datum: datum };
-                    break;
-                  }
-                }
-              }
-              if (hit) {
-                mmSelectNode(hit.datum, hit.g);
-                if (opts.renameNode) {
-                  mmStartRename(hit.datum, hit.g.querySelector(".markmap-foreign") || hit.g);
-                }
-              }
-            }
-          });
-          scheduleCourseMindmapSave();
-          if (message) setMmStatus(message);
-        }
-
-        function mmAddChild(parent) {
-          const root = mmGetRoot();
-          if (!parent) parent = mmSelectedNode || root;
-          if (!parent) {
-            showToast("请先选中一个节点");
-            return;
-          }
-          if (!Array.isArray(parent.children)) parent.children = [];
-          const child = { content: "新节点", children: [], payload: {} };
-          parent.children.push(child);
-          if (parent.payload && parent.payload.fold) parent.payload.fold = 0;
-          mmSelectedNode = child;
-          mmRefreshLiveTree("已添加子节点 · 自动保存中", { renameNode: child });
-        }
-
-        function mmAddSibling(node) {
-          const root = mmGetRoot();
-          if (!node) node = mmSelectedNode;
-          if (!node || !root) {
-            showToast("请先选中一个节点");
-            return;
-          }
-          if (node === root) {
-            mmAddChild(root);
-            return;
-          }
-          const parent = mmFindParent(root, node);
-          if (!parent) {
-            showToast("找不到父节点");
-            return;
-          }
-          if (!Array.isArray(parent.children)) parent.children = [];
-          const idx = parent.children.indexOf(node);
-          const sibling = { content: "新节点", children: [], payload: {} };
-          parent.children.splice(idx < 0 ? parent.children.length : idx + 1, 0, sibling);
-          mmSelectedNode = sibling;
-          mmRefreshLiveTree("已添加同级节点 · 自动保存中", { renameNode: sibling });
-        }
-
-        function mmDeleteNode(node) {
-          const root = mmGetRoot();
-          if (!node) node = mmSelectedNode;
-          if (!node || !root) {
-            showToast("请先选中一个节点");
-            return;
-          }
-          if (node === root) {
-            showToast("根节点不能删除，可直接改名");
-            return;
-          }
-          const parent = mmFindParent(root, node);
-          if (!parent || !Array.isArray(parent.children)) return;
-          const idx = parent.children.indexOf(node);
-          if (idx < 0) return;
-          parent.children.splice(idx, 1);
-          mmSelectedNode = parent;
-          mmRefreshLiveTree("已删除节点 · 自动保存中");
-        }
-
-        function bindMindmapEditHandlers() {
-          if (!courseMmSvg || !window.d3) return;
-          const nodes = courseMmSvg.querySelectorAll("g.markmap-node");
-          nodes.forEach(function (g) {
-            if (g._mmBound) return;
-            g._mmBound = true;
-
-            g.addEventListener("click", function (e) {
-              if (e.target && e.target.tagName === "circle") return;
-              e.stopPropagation();
-              const datum = window.d3.select(g).datum();
-              if (!datum) return;
-              mmSelectNode(datum, g);
-              mmCloseContextMenu();
-            });
-
-            g.addEventListener(
-              "dblclick",
-              function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                const datum = window.d3.select(g).datum();
-                if (!datum) return;
-                mmSelectNode(datum, g);
-                const fo = g.querySelector(".markmap-foreign") || g;
-                mmStartRename(datum, fo);
+          mmInstance = new Ctor({
+            el: courseMmHost,
+            direction: Ctor.SIDE != null ? Ctor.SIDE : 2,
+            editable: true,
+            draggable: true,
+            toolBar: true,
+            keypress: true,
+            allowUndo: true,
+            locale: "zh_CN",
+            newTopicName: "新节点",
+            overflowHidden: true,
+            contextMenu: false,
+            before: {
+              removeNodes: function (nodes) {
+                mmRememberExcludedFromNodes(nodes);
+                return true;
               },
-              true
-            );
-
-            const foDiv = g.querySelector(".markmap-foreign div div");
-            if (foDiv && !foDiv._mmBound) {
-              foDiv._mmBound = true;
-              foDiv.addEventListener("dblclick", function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-                const datum = window.d3.select(g).datum();
-                if (!datum) return;
-                mmSelectNode(datum, g);
-                mmStartRename(datum, g.querySelector(".markmap-foreign") || g);
-              });
+            },
+            theme: {
+              name: "BiliOtter",
+              palette: [
+                "#b07a45",
+                "#8f5e32",
+                "#c9a27a",
+                "#7a6352",
+                "#3b2a1f",
+                "#d4a574",
+                "#a67c52",
+                "#6b5344",
+              ],
+              cssVar: {
+                "--main-color": "#3b2a1f",
+                "--main-bgcolor": "#fff8f0",
+                "--color": "#7a6352",
+                "--bgcolor": "#f4ebe0",
+                "--selected": "#b07a45",
+                "--accent-color": "#8f5e32",
+                "--root-color": "#fff8f0",
+                "--root-bgcolor": "#b07a45",
+                "--panel-color": "#3b2a1f",
+                "--panel-bgcolor": "#fff8f0",
+              },
+            },
+          });
+          mmInstance.bus.addListener("operation", function (op) {
+            if (!op || op.name === "beginEdit") return;
+            if (op.name === "removeNodes" || op.name === "removeNode") {
+              mmRememberExcludedFromNodes(op.objs || op.obj);
             }
-
-            g.addEventListener("contextmenu", function (e) {
+            if (op.name === "finishEdit" && op.obj) {
+              mmMarkOrigin(mmCollectNodePath(op.obj), "user");
+            }
+            if (
+              (op.name === "addChild" ||
+                op.name === "insertSibling" ||
+                op.name === "insertParent") &&
+              op.obj
+            ) {
+              mmMarkOrigin(mmCollectNodePath(op.obj), "user");
+            }
+            mmSyncEditorFromTree();
+            setMmStatus("已改结构 · 自动保存中");
+          });
+          if (courseMmHost && !courseMmHost._mmCtxBound) {
+            courseMmHost._mmCtxBound = true;
+            courseMmHost.addEventListener("contextmenu", function (e) {
+              const tpc = e.target && e.target.closest
+                ? e.target.closest("me-tpc")
+                : null;
+              if (!tpc || !mmInstance) return;
               e.preventDefault();
               e.stopPropagation();
-              const datum = window.d3.select(g).datum();
-              if (!datum) return;
-              mmSelectNode(datum, g);
-              mmOpenContextMenu(e.clientX, e.clientY);
-            });
-          });
-
-          if (mmSelectedPath) {
-            nodes.forEach(function (g) {
-              const datum = window.d3.select(g).datum();
-              if (datum && datum.state && String(datum.state.path) === String(mmSelectedPath)) {
-                g.classList.add("mm-selected");
-                mmSelectedNode = datum;
+              try {
+                if (typeof mmInstance.selectNode === "function") {
+                  mmInstance.selectNode(tpc);
+                }
+              } catch (_) {
+                /* ignore */
               }
+              mmShowCtx(e.clientX, e.clientY);
             });
           }
+          return true;
         }
 
         function renderCourseMindmap(markdown, opts) {
           opts = opts || {};
-          if (!ensureMarkmap() || !courseMmSvg) return;
+          if (!ensureMindElixir()) return;
           try {
-            const md =
-              String(markdown || "").trim() || "# 空导图\n## 双击节点可编辑，或点「一键生成导图」";
-            const { root } = mmTransformer.transform(md);
-            mmExpandAll(root);
-            const markOpts = window.markmap.deriveOptions
-              ? window.markmap.deriveOptions({
-                  colorFreezeLevel: 2,
-                  maxWidth: 280,
-                  duration: opts.skipFit ? 0 : 300,
-                  initialExpandLevel: -1,
-                })
-              : {
-                  initialExpandLevel: -1,
-                  duration: opts.skipFit ? 0 : 300,
-                  maxWidth: 280,
-                };
-            if (!mmInstance) {
-              mmInstance = window.markmap.Markmap.create(courseMmSvg, markOpts, root);
+            const raw = String(markdown || "");
+            const md = mmTakeMetaFromMd(raw).trim();
+            const data = md
+              ? markdownToElixir(md)
+              : markdownToElixir("# 空导图\n## 右键节点可编辑，或点「一键生成导图」");
+            if (typeof mmInstance.refresh === "function" && mmInstance.nodeData) {
+              mmInstance.refresh(data);
             } else {
-              if (typeof mmInstance.setOptions === "function") {
-                mmInstance.setOptions(markOpts);
-              }
-              mmInstance.setData(root);
-              if (!opts.skipFit) mmInstance.fit();
+              mmInstance.init(data);
             }
-            ensureMmPanHit();
-            requestAnimationFrame(function () {
-              bindMindmapEditHandlers();
-            });
+            if (courseMmEditor) {
+              mmSkipEditorSync = true;
+              courseMmEditor.value = md || "";
+              mmSkipEditorSync = false;
+            }
+            if (!opts.skipFit) {
+              requestAnimationFrame(function () {
+                mmFitView();
+              });
+            }
           } catch (err) {
             console.warn("[mindmap]", err);
             setMmStatus("渲染失败");
           }
         }
 
-        /** 铺满画布的透明层，空白处也能拖拽平移 */
-        function ensureMmPanHit() {
-          if (!courseMmSvg || !window.d3) return;
-          const svg = window.d3.select(courseMmSvg);
-          let hit = svg.select("rect.mm-pan-hit");
-          if (hit.empty()) {
-            hit = svg.insert("rect", ":first-child").attr("class", "mm-pan-hit");
+        function mmAddChild() {
+          if (!ensureMindElixir()) return;
+          if (!mmInstance.currentNode) {
+            showToast("请先选中一个节点");
+            return;
           }
-          const w = courseMmSvg.clientWidth || courseMmMap?.clientWidth || 800;
-          const h = courseMmSvg.clientHeight || courseMmMap?.clientHeight || 600;
-          hit
-            .attr("x", 0)
-            .attr("y", 0)
-            .attr("width", w)
-            .attr("height", h)
-            .attr("fill", "transparent")
-            .attr("pointer-events", "all");
+          mmInstance.addChild();
+        }
+
+        function mmAddSibling() {
+          if (!ensureMindElixir()) return;
+          if (!mmInstance.currentNode) {
+            showToast("请先选中一个节点");
+            return;
+          }
+          mmInstance.insertSibling("after");
+        }
+
+        function mmRemoveSelected() {
+          if (!ensureMindElixir()) return;
+          const nodes = mmInstance.currentNodes && mmInstance.currentNodes.length
+            ? mmInstance.currentNodes
+            : mmInstance.currentNode
+              ? [mmInstance.currentNode]
+              : [];
+          if (!nodes.length) {
+            showToast("请先选中一个节点");
+            return;
+          }
+          mmRememberExcludedFromNodes(nodes);
+          if (typeof mmInstance.removeNodes === "function") {
+            mmInstance.removeNodes(nodes);
+          }
         }
 
         function scheduleCourseMindmapRender() {
@@ -2726,13 +3332,31 @@
           const id = activeCourseId;
           if (!id || !courseMmEditor) return;
           try {
+            let body = "";
+            if (mmInstance) {
+              try {
+                body = elixirToMarkdown(mmInstance.getData());
+              } catch (_) {
+                body = "";
+              }
+            }
+            if (!body) body = mmTakeMetaFromMd(courseMmEditor.value);
+            const mindmapMd = mmAttachMeta(body);
             const data = await api(
               "/api/course-groups/" + encodeURIComponent(id) + "/mindmap",
               "PUT",
-              { mindmapMd: courseMmEditor.value }
+              { mindmapMd: mindmapMd }
             );
             if (courseDetails[id]) {
               courseDetails[id].mindmapMd = data.mindmapMd;
+            }
+            mmTakeMetaFromMd(data.mindmapMd || mindmapMd);
+            if (courseMmEditor) {
+              mmSkipEditorSync = true;
+              courseMmEditor.value = stripMindmapMetaForEditor(
+                data.mindmapMd || mindmapMd
+              );
+              mmSkipEditorSync = false;
             }
             if (!opts.silent) {
               setMmStatus("已保存");
@@ -2746,12 +3370,18 @@
           }
         }
 
+        function stripMindmapMetaForEditor(md) {
+          return String(md || "")
+            .replace(
+              /<!--\s*bili-pet:mm-(?:excluded|structure|meta):\s*[\s\S]*?-->/gi,
+              ""
+            )
+            .trim();
+        }
+
         async function loadCourseMindmapPane(group) {
           if (!group || !group.id) return;
           setMode("course");
-          mmClearSelection();
-          mmCancelInlineEdit(false);
-          mmCloseContextMenu();
           if (courseMmTitle) courseMmTitle.textContent = group.title || "课程组";
           if (courseMmMeta) {
             courseMmMeta.textContent =
@@ -2784,41 +3414,185 @@
           renderCourseMindmap(md);
           setMmStatus(
             md.trim()
-              ? "可在导图上双击编辑；左侧大纲同步"
-              : "尚未生成，点「一键生成导图」或直接在导图上添加"
+              ? "可拖节点改结构；左侧大纲同步"
+              : "尚未生成，点「一键生成导图」按结构建骨架"
           );
         }
 
-        async function generateCourseMindmapUi() {
+        async function generateCourseMindmapUi(opts) {
+          opts = opts || {};
+          const mergePrevious = Boolean(opts.mergePrevious);
           const id = activeCourseId;
           if (!id || mmGenerating) return;
           mmGenerating = true;
           if (btnMmGenerate) btnMmGenerate.disabled = true;
-          setMmStatus("正在根据笔记切块生成…");
+          if (btnMmExpand) btnMmExpand.disabled = true;
+          setMmStatus(
+            mergePrevious
+              ? "正在 AI 增补…"
+              : "正在按结构生成大纲…"
+          );
           try {
+            // 把当前画布（含未落库的 AI/手改）一并交给服务端合并
+            let currentMd = "";
+            if (mmInstance) {
+              try {
+                currentMd = mmAttachMeta(elixirToMarkdown(mmInstance.getData()));
+              } catch (_) {
+                currentMd = "";
+              }
+            }
+            if (!currentMd && courseMmEditor) {
+              currentMd = mmAttachMeta(courseMmEditor.value || "");
+            }
             const data = await api(
               "/api/course-groups/" + encodeURIComponent(id) + "/mindmap/generate",
               "POST",
-              {}
+              mergePrevious
+                ? { mergePrevious: true, mode: "ai", mindmapMd: currentMd }
+                : { mode: "structure", mindmapMd: currentMd }
             );
-            if (courseMmEditor) courseMmEditor.value = data.mindmapMd || "";
             if (courseDetails[id]) courseDetails[id].mindmapMd = data.mindmapMd || "";
-            mmClearSelection();
             renderCourseMindmap(data.mindmapMd || "");
-            const src =
-              data.source === "llm"
-                ? "AI 已生成"
-                : data.source === "chunks_outline"
-                  ? "已用切块大纲生成（未启用 LLM）"
-                  : "已生成";
-            setMmStatus(src + " · " + (data.chunkCount || 0) + " 个切块 · 可直接在图上改");
-            showToast("导图已生成");
+            let statusHint;
+            if (data.source === "structure") {
+              statusHint =
+                (data.mergedPrevious ? "已合并结构" : "结构大纲") +
+                " · " +
+                (data.folderCount || 0) +
+                " 文件夹 · " +
+                (data.noteCount || 0) +
+                " 笔记 · " +
+                (data.headingCount || 0) +
+                " 标题";
+            } else if (data.source === "llm" || data.source === "llm_batched") {
+              const cov = data.coverage || {};
+              statusHint =
+                (mergePrevious ? "AI 已增补" : "AI 已生成") +
+                (cov.usedChunks != null
+                  ? " · 切块 " +
+                    cov.usedChunks +
+                    (cov.availableChunks != null
+                      ? "/" + cov.availableChunks
+                      : "")
+                  : "") +
+                (data.batchCount > 1 ? " · " + data.batchCount + " 批" : "");
+            } else if (data.source === "chunks_outline") {
+              statusHint = "切块大纲（未启用 LLM）";
+            } else {
+              statusHint = "已生成";
+            }
+            setMmStatus(statusHint + " · 可拖节点编辑");
+            showToast(
+              data.mergedPrevious
+                ? "已合并生成（保留修改与删除）"
+                : "结构大纲已生成"
+            );
           } catch (err) {
-            setMmStatus(err.message || "生成失败");
-            showToast(err.message || "生成失败");
+            const msg = err.message || "生成失败";
+            setMmStatus(msg + " · 仍显示原导图");
+            showToast(msg);
           } finally {
             mmGenerating = false;
             if (btnMmGenerate) btnMmGenerate.disabled = false;
+            if (btnMmExpand) btnMmExpand.disabled = false;
+          }
+        }
+
+        function mmCollectNodePath(nodeObj) {
+          const path = [];
+          let cur = nodeObj;
+          while (cur) {
+            const t = String(cur.topic || "").trim();
+            if (t) path.unshift(t);
+            cur = cur.parent || null;
+          }
+          return path;
+        }
+
+        function mmBuildChildNode(spec) {
+          const topic = String((spec && spec.topic) || "").trim() || "要点";
+          const node = {
+            id: mmNewId(),
+            topic: topic,
+            expanded: true,
+            children: [],
+          };
+          const kids = (spec && spec.children) || [];
+          for (let i = 0; i < kids.length; i += 1) {
+            node.children.push(mmBuildChildNode(kids[i]));
+          }
+          return node;
+        }
+
+        async function expandSelectedNodeUi() {
+          const id = activeCourseId;
+          if (!id || mmGenerating) return;
+          if (!ensureMindElixir()) return;
+          const parentEl = mmInstance.currentNode;
+          if (!parentEl || !parentEl.nodeObj) {
+            showToast("请先选中一个节点");
+            return;
+          }
+          const nodeObj = parentEl.nodeObj;
+          const path = mmCollectNodePath(nodeObj);
+          const existing = (nodeObj.children || []).map(function (c) {
+            return String(c.topic || "").trim();
+          }).filter(Boolean);
+
+          mmGenerating = true;
+          if (btnMmGenerate) btnMmGenerate.disabled = true;
+          if (btnMmExpand) btnMmExpand.disabled = true;
+          setMmStatus("正在为「" + (nodeObj.topic || "节点") + "」展开细节…");
+          try {
+            const data = await api(
+              "/api/course-groups/" + encodeURIComponent(id) + "/mindmap/expand",
+              "POST",
+              {
+                path: path,
+                topic: String(nodeObj.topic || "").trim(),
+                existingChildren: existing,
+              }
+            );
+            const children = data.children || [];
+            if (!children.length) {
+              showToast("没有可新增的细节");
+              setMmStatus("无新增 · 可换节点再试");
+              return;
+            }
+            // 始终挂到原先选中的父节点，避免 addChild 后 currentNode 漂移
+            let parentRef = parentEl;
+            try {
+              if (nodeObj.id && typeof mmInstance.findEle === "function") {
+                parentRef = mmInstance.findEle(nodeObj.id) || parentEl;
+              }
+            } catch (_) {
+              parentRef = parentEl;
+            }
+            for (let i = 0; i < children.length; i += 1) {
+              const child = mmBuildChildNode(children[i]);
+              mmOriginLock = "ai";
+              mmInstance.addChild(parentRef, child);
+              mmMarkTreeOrigin(children[i], path, "ai");
+              mmOriginLock = null;
+            }
+            mmSyncEditorFromTree();
+            setMmStatus(
+              "已展开 +" +
+                children.length +
+                " · 切块 " +
+                (data.chunkCount || 0) +
+                " · 可继续选节点展开"
+            );
+            showToast("已补充 " + children.length + " 个细节");
+          } catch (err) {
+            const msg = err.message || "展开失败";
+            setMmStatus(msg);
+            showToast(msg);
+          } finally {
+            mmGenerating = false;
+            if (btnMmGenerate) btnMmGenerate.disabled = false;
+            if (btnMmExpand) btnMmExpand.disabled = false;
           }
         }
 
@@ -2832,28 +3606,170 @@
           panelCourses.classList.toggle("active", sideView === "courses");
         }
 
-        function renderList(notes) {
-          noteList.innerHTML = "";
-          listCount.textContent = "共 " + notes.length + " 条";
-          listEmpty.hidden = notes.length > 0;
+        function noteTitleByBvid(bvid) {
+          const id = String(bvid || "").trim();
+          const hit = allNotes.find(function (n) {
+            return n && n.bvid === id;
+          });
+          return (hit && (hit.title || hit.bvid)) || id;
+        }
 
-          notes.forEach(function (item, index) {
+        function updateNotesBatchBar() {
+          const bar = document.getElementById("notes-batch-bar");
+          const countEl = document.getElementById("notes-batch-count");
+          const btnSelect = document.getElementById("btn-notes-select");
+          if (countEl) countEl.textContent = "已选 " + selectedBvids.size;
+          if (bar) bar.classList.toggle("show", notesSelectMode);
+          if (btnSelect) {
+            btnSelect.classList.toggle("is-on", notesSelectMode);
+            btnSelect.textContent = notesSelectMode ? "取消" : "选择";
+          }
+          noteList.classList.toggle("select-mode", notesSelectMode);
+        }
+
+        function clearNoteSelection() {
+          selectedBvids.clear();
+          noteList.querySelectorAll(".note-row.is-selected").forEach(function (row) {
+            row.classList.remove("is-selected");
+            const cb = row.querySelector(".note-check");
+            if (cb) cb.checked = false;
+          });
+          updateNotesBatchBar();
+        }
+
+        function setNotesSelectMode(on) {
+          notesSelectMode = Boolean(on);
+          if (!notesSelectMode) selectedBvids.clear();
+          renderList(visibleNotes.length ? visibleNotes : allNotes);
+        }
+
+        function toggleNoteSelected(bvid, li, check) {
+          const id = String(bvid || "").trim();
+          if (!id) return;
+          if (selectedBvids.has(id)) {
+            selectedBvids.delete(id);
+            if (li) li.classList.remove("is-selected");
+            if (check) check.checked = false;
+          } else {
+            selectedBvids.add(id);
+            if (li) li.classList.add("is-selected");
+            if (check) check.checked = true;
+          }
+          updateNotesBatchBar();
+        }
+
+        function selectAllVisibleNotes() {
+          noteList.querySelectorAll(".note-row").forEach(function (row) {
+            const bvid = row.getAttribute("data-bvid");
+            if (!bvid) return;
+            selectedBvids.add(bvid);
+            row.classList.add("is-selected");
+            const cb = row.querySelector(".note-check");
+            if (cb) cb.checked = true;
+          });
+          updateNotesBatchBar();
+        }
+
+        function renderList(notes) {
+          const list = Array.isArray(notes) ? notes : [];
+          visibleNotes = list;
+          noteList.innerHTML = "";
+          listCount.textContent = "共 " + list.length + " 条";
+          listEmpty.hidden = list.length > 0;
+          noteList.classList.toggle("select-mode", notesSelectMode);
+
+          list.forEach(function (item, index) {
+            const bvid = String(item.bvid || "").trim();
             const li = document.createElement("li");
+            li.className =
+              "note-row" + (selectedBvids.has(bvid) ? " is-selected" : "");
+            li.setAttribute("data-bvid", bvid);
+            li.style.animationDelay = Math.min(index, 12) * 0.04 + "s";
+
+            const check = document.createElement("input");
+            check.type = "checkbox";
+            check.className = "note-check";
+            check.checked = selectedBvids.has(bvid);
+            check.title = "勾选后可批量加入课程组或删除";
+            check.addEventListener("click", function (e) {
+              e.stopPropagation();
+            });
+            check.addEventListener("change", function () {
+              if (!bvid) return;
+              if (check.checked) {
+                selectedBvids.add(bvid);
+                li.classList.add("is-selected");
+              } else {
+                selectedBvids.delete(bvid);
+                li.classList.remove("is-selected");
+              }
+              updateNotesBatchBar();
+            });
+
             const btn = document.createElement("button");
             btn.type = "button";
-            btn.className = "note-item" + (item.bvid === activeBvid ? " active" : "");
-            btn.style.animationDelay = Math.min(index, 12) * 0.04 + "s";
+            btn.className =
+              "note-item" + (item.bvid === activeBvid ? " active" : "");
             btn.innerHTML =
               '<div class="note-title"></div><div class="note-sub"></div>';
-            btn.querySelector(".note-title").textContent = item.title || item.bvid || "未命名";
+            btn.querySelector(".note-title").textContent =
+              item.title || item.bvid || "未命名";
             btn.querySelector(".note-sub").textContent =
               (item.bvid || "") + " · " + formatTime(item.updatedAt);
             btn.addEventListener("click", function () {
+              if (notesSelectMode) {
+                toggleNoteSelected(bvid, li, check);
+                return;
+              }
               openPreview(item.bvid);
             });
+
+            li.appendChild(check);
             li.appendChild(btn);
             noteList.appendChild(li);
           });
+          updateNotesBatchBar();
+        }
+
+        async function deleteSelectedNotes() {
+          const bvids = Array.from(selectedBvids);
+          if (!bvids.length) {
+            showToast("请先勾选要删除的笔记");
+            return;
+          }
+          const ok = window.confirm(
+            "确定删除选中的 " +
+              bvids.length +
+              " 篇笔记？\n将移入废纸篓，30 天内可恢复。"
+          );
+          if (!ok) return;
+          let okCount = 0;
+          let failCount = 0;
+          for (let i = 0; i < bvids.length; i++) {
+            const bvid = bvids[i];
+            try {
+              await api("/api/notes/" + encodeURIComponent(bvid), "DELETE");
+              okCount += 1;
+              if (activeBvid === bvid) {
+                activeBvid = null;
+                dirty = false;
+                setMode("welcome");
+              }
+            } catch (_) {
+              failCount += 1;
+            }
+          }
+          if (okCount > 0 && failCount > 0) {
+            showToast("已移入废纸篓 " + okCount + " 篇，失败 " + failCount + " 篇");
+          } else if (okCount > 0) {
+            showToast("已移入废纸篓 " + okCount + " 篇");
+          } else {
+            showToast("删除失败");
+          }
+          selectedBvids.clear();
+          await loadList();
+          await loadCourses();
+          updateNotesBatchBar();
         }
 
         function folderKey(courseId, folderId) {
@@ -2867,7 +3783,7 @@
           selectEl.innerHTML = "";
           const rootOpt = document.createElement("option");
           rootOpt.value = "root";
-          rootOpt.textContent = "未分类（根目录）";
+          rootOpt.textContent = "放在课程组下";
           selectEl.appendChild(rootOpt);
           list.forEach(function (folder) {
             const opt = document.createElement("option");
@@ -3045,13 +3961,16 @@
           const title = document.createElement("span");
           title.className = "folder-node-title";
           title.textContent =
-            (folder.id === "root" ? "未分类" : folder.title || "未命名文件夹") +
-            "（" +
-            items.length +
-            "）";
+            (folder.title || "未命名文件夹") + "（" + items.length + "）";
 
           head.appendChild(chevron);
           head.appendChild(title);
+
+          const renamingThis =
+            folderComposer &&
+            folderComposer.mode === "rename" &&
+            folderComposer.courseId === courseId &&
+            folderComposer.folderId === folder.id;
 
           if (folder.id !== "root") {
             const actions = document.createElement("div");
@@ -3059,10 +3978,15 @@
             const renameBtn = document.createElement("button");
             renameBtn.type = "button";
             renameBtn.className = "btn";
-            renameBtn.textContent = "改名";
+            renameBtn.textContent = renamingThis ? "收起" : "改名";
             renameBtn.addEventListener("click", function (e) {
               e.stopPropagation();
-              renameFolder(folder.id, folder.title, courseId);
+              if (renamingThis) {
+                folderComposer = null;
+                renderCourseTree();
+              } else {
+                startRenameFolder(folder.id, folder.title, courseId);
+              }
             });
             const delBtn = document.createElement("button");
             delBtn.type = "button";
@@ -3085,11 +4009,31 @@
 
           const body = document.createElement("div");
           body.className = "folder-node-body";
+          if (renamingThis) {
+            body.appendChild(
+              buildNameComposerBox({
+                heading: "重命名文件夹",
+                placeholder: "文件夹名称",
+                initial: folderComposer.title || folder.title || "",
+                submitLabel: "保存",
+                onSubmit: function (title) {
+                  return submitRenameFolder(courseId, folder.id, title);
+                },
+                onCancel: function () {
+                  folderComposer = null;
+                  renderCourseTree();
+                },
+              })
+            );
+          }
+
           if (!items.length) {
-            const empty = document.createElement("div");
-            empty.className = "folder-empty";
-            empty.textContent = "空文件夹";
-            body.appendChild(empty);
+            if (!renamingThis) {
+              const empty = document.createElement("div");
+              empty.className = "folder-empty";
+              empty.textContent = "空文件夹";
+              body.appendChild(empty);
+            }
           } else {
             items.forEach(function (item) {
               body.appendChild(buildTreeNoteItem(item, courseId, folders));
@@ -3143,20 +4087,37 @@
             const actions = document.createElement("div");
             actions.className = "course-node-actions";
 
+            const renamingCourse =
+              courseRenameComposer && courseRenameComposer.courseId === id;
+            const creatingFolder =
+              folderComposer &&
+              folderComposer.mode === "create" &&
+              folderComposer.courseId === id;
+
             const renameBtn = document.createElement("button");
             renameBtn.type = "button";
             renameBtn.className = "btn";
-            renameBtn.textContent = "重命名";
+            renameBtn.textContent = renamingCourse ? "收起重命名" : "重命名";
             renameBtn.addEventListener("click", function () {
-              renameCourse(id, summary.title);
+              if (renamingCourse) {
+                courseRenameComposer = null;
+                renderCourseTree();
+              } else {
+                startRenameCourse(id, summary.title);
+              }
             });
 
             const folderBtn = document.createElement("button");
             folderBtn.type = "button";
             folderBtn.className = "btn";
-            folderBtn.textContent = "＋ 文件夹";
+            folderBtn.textContent = creatingFolder ? "收起文件夹" : "＋ 文件夹";
             folderBtn.addEventListener("click", function () {
-              createFolderInCourse(id);
+              if (creatingFolder) {
+                folderComposer = null;
+                renderCourseTree();
+              } else {
+                createFolderInCourse(id);
+              }
             });
 
             const addBtn = document.createElement("button");
@@ -3165,6 +4126,10 @@
             addBtn.textContent = addingCourseId === id ? "收起添加" : "＋ 添加";
             addBtn.addEventListener("click", function () {
               addingCourseId = addingCourseId === id ? null : id;
+              if (addingCourseId) {
+                folderComposer = null;
+                courseRenameComposer = null;
+              }
               renderCourseTree();
             });
 
@@ -3182,6 +4147,42 @@
             actions.appendChild(delBtn);
             body.appendChild(actions);
 
+            if (renamingCourse) {
+              body.appendChild(
+                buildNameComposerBox({
+                  heading: "重命名课程组",
+                  placeholder: "课程组名称",
+                  initial: courseRenameComposer.title || summary.title || "",
+                  submitLabel: "保存",
+                  onSubmit: function (title) {
+                    return submitRenameCourse(id, title);
+                  },
+                  onCancel: function () {
+                    courseRenameComposer = null;
+                    renderCourseTree();
+                  },
+                })
+              );
+            }
+
+            if (creatingFolder) {
+              body.appendChild(
+                buildNameComposerBox({
+                  heading: "新建文件夹",
+                  placeholder: "例如：第一章 / 算法基础",
+                  initial: folderComposer.title || "",
+                  submitLabel: "创建",
+                  onSubmit: function (title) {
+                    return submitCreateFolder(id, title);
+                  },
+                  onCancel: function () {
+                    folderComposer = null;
+                    renderCourseTree();
+                  },
+                })
+              );
+            }
+
             if (!detail) {
               const loading = document.createElement("div");
               loading.className = "folder-empty";
@@ -3198,14 +4199,9 @@
               });
 
               if ((byFolder.root || []).length) {
-                body.appendChild(
-                  buildFolderNode(
-                    id,
-                    { id: "root", title: "未分类" },
-                    byFolder.root || [],
-                    folders
-                  )
-                );
+                (byFolder.root || []).forEach(function (item) {
+                  body.appendChild(buildTreeNoteItem(item, id, folders));
+                });
               }
 
               folders.forEach(function (folder) {
@@ -3253,7 +4249,7 @@
           folderSelect.innerHTML = "";
           const root = document.createElement("option");
           root.value = "root";
-          root.textContent = "未分类（根目录）";
+          root.textContent = "放在课程组下";
           folderSelect.appendChild(root);
           if (!groupId) return;
           try {
@@ -3274,15 +4270,33 @@
           }
         }
 
-        async function openAssignCourse() {
-          if (!activeBvid) {
-            showToast("请先打开一条笔记");
+        async function openAssignCourse(opts) {
+          opts = opts || {};
+          const fromBatch = Array.isArray(opts.bvids) && opts.bvids.length > 0;
+          const batchBvids = fromBatch
+            ? opts.bvids.map(function (b) {
+                return String(b || "").trim();
+              }).filter(Boolean)
+            : [];
+
+          if (!fromBatch && !activeBvid) {
+            showToast("请先打开一条笔记，或勾选多篇后点「加入课程组」");
             return;
           }
-          if (dirty && mode === "edit") {
+          if (!fromBatch && dirty && mode === "edit") {
             await saveCurrent({ silent: true });
           }
-          assignReturnMode = mode === "edit" ? "edit" : "preview";
+          assignReturnMode = fromBatch
+            ? mode === "assign-course"
+              ? "welcome"
+              : mode === "edit"
+                ? "edit"
+                : mode === "preview"
+                  ? "preview"
+                  : "welcome"
+            : mode === "edit"
+              ? "edit"
+              : "preview";
           if (!allCourses.length) await loadCourses();
           if (!allCourses.length) {
             showToast("还没有课程组，请先新建一个");
@@ -3291,13 +4305,29 @@
             return;
           }
 
-          const title =
-            (mode === "edit" ? titleInput.value : previewHeading.textContent) ||
-            activeBvid;
-          document.getElementById("assign-note-label").value =
-            title + " · " + activeBvid;
-          document.getElementById("assign-note-meta").textContent =
-            "将笔记加入课程组。写完或写一半都可以，不会改动笔记正文。";
+          assignTargetBvids = fromBatch
+            ? batchBvids
+            : [String(activeBvid || "").trim()].filter(Boolean);
+
+          if (fromBatch) {
+            const titles = assignTargetBvids.map(noteTitleByBvid);
+            const preview =
+              titles.length <= 3
+                ? titles.join("、")
+                : titles.slice(0, 3).join("、") + " 等";
+            document.getElementById("assign-note-label").value =
+              "已选 " + assignTargetBvids.length + " 篇：" + preview;
+            document.getElementById("assign-note-meta").textContent =
+              "将选中的笔记批量加入课程组或文件夹，不会改动笔记正文。";
+          } else {
+            const title =
+              (mode === "edit" ? titleInput.value : previewHeading.textContent) ||
+              activeBvid;
+            document.getElementById("assign-note-label").value =
+              title + " · " + activeBvid;
+            document.getElementById("assign-note-meta").textContent =
+              "将笔记加入课程组。写完或写一半都可以，不会改动笔记正文。";
+          }
 
           const courseSelect = document.getElementById("assign-course-select");
           courseSelect.innerHTML = "";
@@ -3314,6 +4344,7 @@
         }
 
         function cancelAssignCourse() {
+          assignTargetBvids = [];
           if (assignReturnMode === "edit") setMode("edit");
           else if (assignReturnMode === "preview") setMode("preview");
           else setMode("welcome");
@@ -3321,7 +4352,13 @@
 
         async function submitAssignCourse(e) {
           e.preventDefault();
-          if (!activeBvid) return;
+          const bvids =
+            assignTargetBvids.length > 0
+              ? assignTargetBvids.slice()
+              : activeBvid
+                ? [activeBvid]
+                : [];
+          if (!bvids.length) return;
           const groupId = String(
             document.getElementById("assign-course-select").value || ""
           ).trim();
@@ -3333,26 +4370,51 @@
             showToast("请选择课程组");
             return;
           }
-          const title =
-            String(titleInput.value || previewHeading.textContent || "").trim() ||
-            activeBvid;
-          try {
-            const data = await api(
-              "/api/course-groups/" + encodeURIComponent(groupId) + "/items",
-              "POST",
-              { bvid: activeBvid, title: title, folderId: folderId }
-            );
-            showToast(data.moved ? "已更新所在文件夹" : "已加入课程组");
+
+          let okCount = 0;
+          let failCount = 0;
+          let lastGroup = null;
+          for (let i = 0; i < bvids.length; i++) {
+            const bvid = bvids[i];
+            const title =
+              bvids.length === 1 && activeBvid === bvid
+                ? String(
+                    titleInput.value || previewHeading.textContent || ""
+                  ).trim() || noteTitleByBvid(bvid)
+                : noteTitleByBvid(bvid);
+            try {
+              const data = await api(
+                "/api/course-groups/" + encodeURIComponent(groupId) + "/items",
+                "POST",
+                { bvid: bvid, title: title, folderId: folderId }
+              );
+              okCount += 1;
+              if (data.group) lastGroup = data.group;
+            } catch (_) {
+              failCount += 1;
+            }
+          }
+
+          if (okCount > 0) {
+            if (failCount > 0) {
+              showToast("已加入 " + okCount + " 篇，失败 " + failCount + " 篇");
+            } else if (bvids.length > 1) {
+              showToast("已加入 " + okCount + " 篇");
+            } else {
+              showToast("已加入课程组");
+            }
+            clearNoteSelection();
+            assignTargetBvids = [];
             await loadCourses();
             setSideView("courses");
             expandedCourses.add(groupId);
             activeCourseId = groupId;
-            if (data.group) courseDetails[groupId] = data.group;
+            if (lastGroup) courseDetails[groupId] = lastGroup;
             noteReturnContext = { type: "course", courseId: groupId };
             renderCourseTree();
             setMode("welcome");
-          } catch (err) {
-            showToast(err.message || "加入失败");
+          } else {
+            showToast("加入失败");
           }
         }
 
@@ -3594,14 +4656,16 @@
         async function deleteCurrent() {
           if (!activeBvid) return;
           const bvid = activeBvid;
-          const ok = window.confirm("确定删除这条笔记？\n" + bvid + "\n删除后不可恢复。");
+          const ok = window.confirm(
+            "确定删除这条笔记？\n" + bvid + "\n将移入废纸篓，30 天内可恢复。"
+          );
           if (!ok) return;
           try {
             clearTimeout(saveTimer);
             saveTimer = null;
             dirty = false;
             await api("/api/notes/" + encodeURIComponent(bvid), "DELETE");
-            showToast("已删除笔记");
+            showToast("已移入废纸篓");
             activeBvid = null;
             setMode("welcome");
             await loadList();
@@ -3706,13 +4770,77 @@
           }
         }
 
-        async function renameCourse(courseId, currentTitle) {
+        function buildNameComposerBox(opts) {
+          const box = document.createElement("div");
+          box.className = "side-add-box";
+          const heading = document.createElement("h4");
+          heading.textContent = opts.heading || "名称";
+          const form = document.createElement("form");
+          form.className = "course-form";
+          form.style.marginTop = "0";
+          const label = document.createElement("label");
+          label.textContent = "名称";
+          const input = document.createElement("input");
+          input.type = "text";
+          input.placeholder = opts.placeholder || "";
+          input.value = opts.initial || "";
+          label.appendChild(input);
+          const row = document.createElement("div");
+          row.className = "course-form-row";
+          const submitBtn = document.createElement("button");
+          submitBtn.type = "submit";
+          submitBtn.className = "btn primary";
+          submitBtn.textContent = opts.submitLabel || "确定";
+          const cancelBtn = document.createElement("button");
+          cancelBtn.type = "button";
+          cancelBtn.className = "btn";
+          cancelBtn.textContent = "取消";
+          row.appendChild(submitBtn);
+          row.appendChild(cancelBtn);
+          form.appendChild(label);
+          form.appendChild(row);
+          box.appendChild(heading);
+          box.appendChild(form);
+
+          form.addEventListener("submit", function (e) {
+            e.preventDefault();
+            const title = String(input.value || "").trim();
+            if (!title) {
+              showToast("名称不能为空");
+              return;
+            }
+            Promise.resolve(opts.onSubmit(title)).catch(function (err) {
+              showToast(err.message || "操作失败");
+            });
+          });
+          cancelBtn.addEventListener("click", function () {
+            if (typeof opts.onCancel === "function") opts.onCancel();
+          });
+          setTimeout(function () {
+            input.focus();
+            input.select();
+          }, 0);
+          return box;
+        }
+
+        function startRenameCourse(courseId, currentTitle) {
           const id = String(courseId || activeCourseId || "").trim();
           if (!id) return;
-          const nextTitle = window.prompt("课程组名称", currentTitle || "");
-          if (nextTitle == null) return;
-          const title = String(nextTitle).trim();
-          if (!title) {
+          courseRenameComposer = {
+            courseId: id,
+            title: String(currentTitle || "").trim(),
+          };
+          folderComposer = null;
+          addingCourseId = null;
+          expandedCourses.add(id);
+          renderCourseTree();
+        }
+
+        async function submitRenameCourse(courseId, title) {
+          const id = String(courseId || "").trim();
+          const name = String(title || "").trim();
+          if (!id) return;
+          if (!name) {
             showToast("名称不能为空");
             return;
           }
@@ -3720,9 +4848,10 @@
             const data = await api(
               "/api/course-groups/" + encodeURIComponent(id),
               "PUT",
-              { title: title, topic: "" }
+              { title: name, topic: "" }
             );
             showToast("已更新名称");
+            courseRenameComposer = null;
             if (data.group) courseDetails[id] = data.group;
             await loadCourses();
           } catch (err) {
@@ -3743,6 +4872,10 @@
             showToast("已删除课程组");
             expandedCourses.delete(id);
             delete courseDetails[id];
+            if (folderComposer && folderComposer.courseId === id) folderComposer = null;
+            if (courseRenameComposer && courseRenameComposer.courseId === id) {
+              courseRenameComposer = null;
+            }
             if (activeCourseId === id) {
               activeCourseId = null;
               activeCourse = null;
@@ -3805,13 +4938,21 @@
           }
         }
 
-        async function createFolderInCourse(courseId) {
+        function createFolderInCourse(courseId) {
           const id = String(courseId || activeCourseId || "").trim();
           if (!id) return;
-          const name = window.prompt("文件夹名称", "");
-          if (name == null) return;
-          const title = String(name).trim();
-          if (!title) {
+          folderComposer = { courseId: id, mode: "create", title: "" };
+          courseRenameComposer = null;
+          addingCourseId = null;
+          expandedCourses.add(id);
+          renderCourseTree();
+        }
+
+        async function submitCreateFolder(courseId, title) {
+          const id = String(courseId || "").trim();
+          const name = String(title || "").trim();
+          if (!id) return;
+          if (!name) {
             showToast("名称不能为空");
             return;
           }
@@ -3819,9 +4960,10 @@
             const data = await api(
               "/api/course-groups/" + encodeURIComponent(id) + "/folders",
               "POST",
-              { title: title }
+              { title: name }
             );
             showToast("已创建文件夹");
+            folderComposer = null;
             if (data.group) courseDetails[id] = data.group;
             if (data.folderId) expandedFolders.add(folderKey(id, data.folderId));
             await loadCourses();
@@ -3830,13 +4972,28 @@
           }
         }
 
-        async function renameFolder(folderId, currentTitle, courseId) {
+        function startRenameFolder(folderId, currentTitle, courseId) {
           const id = String(courseId || activeCourseId || "").trim();
           if (!id || !folderId) return;
-          const next = window.prompt("文件夹名称", currentTitle || "");
-          if (next == null) return;
-          const title = String(next).trim();
-          if (!title) {
+          folderComposer = {
+            courseId: id,
+            mode: "rename",
+            folderId: String(folderId),
+            title: String(currentTitle || "").trim(),
+          };
+          courseRenameComposer = null;
+          addingCourseId = null;
+          expandedCourses.add(id);
+          expandedFolders.add(folderKey(id, folderId));
+          renderCourseTree();
+        }
+
+        async function submitRenameFolder(courseId, folderId, title) {
+          const id = String(courseId || "").trim();
+          const fid = String(folderId || "").trim();
+          const name = String(title || "").trim();
+          if (!id || !fid) return;
+          if (!name) {
             showToast("名称不能为空");
             return;
           }
@@ -3845,11 +5002,12 @@
               "/api/course-groups/" +
                 encodeURIComponent(id) +
                 "/folders/" +
-                encodeURIComponent(folderId),
+                encodeURIComponent(fid),
               "PUT",
-              { title: title }
+              { title: name }
             );
             showToast("已重命名");
+            folderComposer = null;
             if (data.group) courseDetails[id] = data.group;
             await loadCourses();
           } catch (err) {
@@ -3863,8 +5021,8 @@
           const ok = window.confirm(
             "删除文件夹「" +
               (title || "") +
-              "」？\n里面的内容会回到「未分类」，不会移出课程组。"
-          );
+              "」？\n里面的内容会回到课程组下，不会移出课程组。"
+            );
           if (!ok) return;
           try {
             const data = await api(
@@ -3876,6 +5034,13 @@
             );
             showToast("已删除文件夹");
             expandedFolders.delete(folderKey(id, folderId));
+            if (
+              folderComposer &&
+              folderComposer.courseId === id &&
+              folderComposer.folderId === folderId
+            ) {
+              folderComposer = null;
+            }
             if (data.group) courseDetails[id] = data.group;
             await loadCourses();
           } catch (err) {
@@ -3979,8 +5144,44 @@
         document.getElementById("btn-cancel-create-course").addEventListener("click", function () {
           if (sideCreateBox) sideCreateBox.classList.remove("show");
         });
-        document.getElementById("btn-assign-course").addEventListener("click", openAssignCourse);
-        document.getElementById("btn-assign-course-edit").addEventListener("click", openAssignCourse);
+        document.getElementById("btn-assign-course").addEventListener("click", function () {
+          void openAssignCourse();
+        });
+        document.getElementById("btn-assign-course-edit").addEventListener("click", function () {
+          void openAssignCourse();
+        });
+        document.getElementById("btn-notes-select")?.addEventListener("click", function () {
+          setNotesSelectMode(!notesSelectMode);
+        });
+        document.getElementById("btn-notes-trash")?.addEventListener("click", function () {
+          openTrashView();
+        });
+        document.getElementById("btn-close-trash")?.addEventListener("click", function () {
+          closeTrashView();
+        });
+        document.getElementById("btn-batch-assign")?.addEventListener("click", function () {
+          const bvids = Array.from(selectedBvids);
+          if (!bvids.length) {
+            showToast("请先勾选笔记");
+            return;
+          }
+          void openAssignCourse({ bvids: bvids });
+        });
+        document.getElementById("btn-batch-all")?.addEventListener("click", function () {
+          selectAllVisibleNotes();
+        });
+        document.getElementById("btn-batch-delete")?.addEventListener("click", function () {
+          void deleteSelectedNotes();
+        });
+        document.getElementById("btn-batch-done")?.addEventListener("click", function () {
+          setNotesSelectMode(false);
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key !== "Escape") return;
+          if (notesSelectMode && mode !== "assign-course") {
+            setNotesSelectMode(false);
+          }
+        });
         document.getElementById("btn-cancel-assign").addEventListener("click", cancelAssignCourse);
         document.getElementById("btn-cancel-assign-form").addEventListener("click", cancelAssignCourse);
         document.getElementById("form-assign-course").addEventListener("submit", submitAssignCourse);
@@ -4021,21 +5222,54 @@
         document.getElementById("btn-delete-preview").addEventListener("click", deleteCurrent);
         document.getElementById("btn-delete-edit").addEventListener("click", deleteCurrent);
         titleInput.addEventListener("input", scheduleSave);
-        bodyInput.addEventListener("input", scheduleSave);
+        bodyInput.addEventListener("input", function () {
+          maybeOpenFenceFromInput();
+          scheduleSave();
+        });
+        bindTabIndent(bodyInput, 2);
+
+        document.getElementById("code-fence-ok")?.addEventListener("click", function () {
+          applyFenceMeta();
+        });
+        document.getElementById("code-fence-cancel")?.addEventListener("click", function () {
+          applyFenceMeta({ skipMeta: true });
+        });
+        codeFencePop?.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" && e.target && e.target.tagName !== "BUTTON") {
+            e.preventDefault();
+            applyFenceMeta();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            applyFenceMeta({ skipMeta: true });
+          }
+        });
 
         if (courseMmEditor) {
           courseMmEditor.addEventListener("input", function () {
             if (mmSkipEditorSync) return;
-            mmClearSelection();
             scheduleCourseMindmapRender();
             scheduleCourseMindmapSave();
             setMmStatus("编辑中…");
           });
         }
-        if (btnMmGenerate) btnMmGenerate.addEventListener("click", generateCourseMindmapUi);
+        if (btnMmGenerate) {
+          btnMmGenerate.addEventListener("click", function () {
+            generateCourseMindmapUi({ mergePrevious: false });
+          });
+        }
+        if (btnMmExpand) {
+          btnMmExpand.addEventListener("click", function () {
+            expandSelectedNodeUi();
+          });
+        }
+        if (btnMmUndo) {
+          btnMmUndo.addEventListener("click", function () {
+            mmUndo();
+          });
+        }
         if (btnMmFit) {
           btnMmFit.addEventListener("click", function () {
-            if (mmInstance) mmInstance.fit();
+            mmFitView();
           });
         }
         if (btnMmSave) {
@@ -4043,86 +5277,39 @@
             void saveCourseMindmapNow({ silent: false });
           });
         }
-        if (btnMmAddChild) {
-          btnMmAddChild.addEventListener("click", function () {
-            mmAddChild();
-          });
-        }
-        if (btnMmAddSibling) {
-          btnMmAddSibling.addEventListener("click", function () {
-            mmAddSibling();
-          });
-        }
         if (mmCtx) {
           mmCtx.addEventListener("click", function (e) {
-            const btn = e.target && e.target.closest ? e.target.closest("[data-mm-act]") : null;
+            const btn = e.target && e.target.closest
+              ? e.target.closest("button[data-act]")
+              : null;
             if (!btn) return;
-            const act = btn.getAttribute("data-mm-act");
-            mmCloseContextMenu();
-            if (act === "rename") mmStartRename(mmSelectedNode);
-            else if (act === "add-child") mmAddChild(mmSelectedNode);
-            else if (act === "add-sibling") mmAddSibling(mmSelectedNode);
-            else if (act === "delete") mmDeleteNode(mmSelectedNode);
+            const act = btn.getAttribute("data-act");
+            mmHideCtx();
+            if (act === "child") mmAddChild();
+            else if (act === "sibling") mmAddSibling();
+            else if (act === "expand") expandSelectedNodeUi();
+            else if (act === "undo") mmUndo();
+            else if (act === "remove") mmRemoveSelected();
           });
         }
         document.addEventListener("click", function (e) {
-          if (!mmCtx || !mmCtx.classList.contains("open")) return;
+          if (!mmCtx || mmCtx.hidden) return;
           if (mmCtx.contains(e.target)) return;
-          mmCloseContextMenu();
+          mmHideCtx();
         });
-        if (courseMmMap) {
-          courseMmMap.addEventListener("click", function (e) {
-            if (e.target === courseMmSvg || e.target === courseMmMap) {
-              mmClearSelection();
-              mmCloseContextMenu();
-            }
-          });
-        }
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape") mmHideCtx();
+        });
 
         document.addEventListener("keydown", function (e) {
-          if (mode === "course" && !mmInlineInput) {
-            const tag = (e.target && e.target.tagName) || "";
-            const typing =
-              tag === "INPUT" ||
-              tag === "TEXTAREA" ||
-              (e.target && e.target.isContentEditable);
-            if (!typing) {
-              if (e.key === "F2" && mmSelectedNode) {
-                e.preventDefault();
-                mmStartRename(mmSelectedNode);
-                return;
-              }
-              if (e.key === "Tab" && mmSelectedNode) {
-                e.preventDefault();
-                mmAddChild(mmSelectedNode);
-                return;
-              }
-              if (
-                (e.key === "Delete" || e.key === "Backspace") &&
-                mmSelectedNode &&
-                !e.metaKey &&
-                !e.ctrlKey
-              ) {
-                e.preventDefault();
-                mmDeleteNode(mmSelectedNode);
-                return;
-              }
-              if (e.key === "Enter" && !e.shiftKey && mmSelectedNode) {
-                e.preventDefault();
-                mmAddSibling(mmSelectedNode);
-                return;
-              }
-            }
-          }
           if (e.key !== "Escape") return;
-          if (mmInlineInput) {
-            mmCancelInlineEdit(false);
-            return;
-          }
-          if (mmCtx && mmCtx.classList.contains("open")) {
-            mmCloseContextMenu();
-            return;
-          }
+          const tag = (e.target && e.target.tagName) || "";
+          const editingMap =
+            mode === "course" &&
+            (tag === "INPUT" ||
+              (e.target && e.target.isContentEditable) ||
+              (e.target && e.target.id === "input-box"));
+          if (editingMap) return;
           if (mode === "edit") {
             document.getElementById("btn-back-preview").click();
           } else if (mode === "preview") {
@@ -4133,6 +5320,8 @@
             setMode("welcome");
           } else if (mode === "activity") {
             closeActivityView();
+          } else if (mode === "trash") {
+            closeTrashView();
           } else if (sideCreateBox && sideCreateBox.classList.contains("show")) {
             sideCreateBox.classList.remove("show");
           }
@@ -4218,6 +5407,25 @@
             ) {
               if (payload && payload.ok === false) {
                 showToast("切号失败：未同步完成，仍保留当前账号数据");
+                return;
+              }
+              if (payload && payload.fromLocal) {
+                void loadList();
+                void loadCourses();
+                if (payload.switched) {
+                  const now = Date.now();
+                  if (
+                    !(
+                      eventUid &&
+                      eventUid === lastKbSwitchUid &&
+                      now - lastKbSwitchAt < 8000
+                    )
+                  ) {
+                    lastKbSwitchUid = eventUid || lastKbSwitchUid;
+                    lastKbSwitchAt = now;
+                    showToast("已切换账号知识库");
+                  }
+                }
                 return;
               }
               // 首拉未完成：只提示拉取中，不展示空库
@@ -4326,18 +5534,27 @@
                 status === "ready" &&
                 payload &&
                 payload.dataPullDone &&
-                payload.opsReady) ||
-              (kind === "kb_account_ready" && payload && payload.dataPullDone)
+                payload.opsReady &&
+                !payload.fromLocal &&
+                payload.reason !== "local_sqlite_hit" &&
+                payload.celebrate !== false &&
+                (payload.celebrate === true || payload.pulled)) ||
+              (kind === "kb_account_ready" &&
+                payload &&
+                payload.dataPullDone &&
+                !payload.fromLocal &&
+                payload.celebrate !== false &&
+                (payload.celebrate === true || payload.pulled))
             ) {
               const now = Date.now();
               if (
                 eventUid &&
                 eventUid === lastKbSwitchUid &&
-                now - lastKbSwitchAt < 2000
+                now - lastKbSwitchAt < 60000
               ) {
+                // 同账号已提示过：只静默刷新，不再弹「数据拉取完成」
                 void loadList();
                 void loadCourses();
-                showToast("数据拉取完成");
                 return;
               }
               lastKbSwitchUid = eventUid || lastKbSwitchUid;

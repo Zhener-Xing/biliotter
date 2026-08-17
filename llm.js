@@ -4,6 +4,7 @@ const {
   saveNoteDoc,
   cornellToMarkdown,
 } = require('./notes-db');
+const { detectContentLang, langInstruction, langSystemLock } = require('./content-lang');
 
 function envFlag(name, fallback = false) {
   const v = String(process.env[name] ?? '').trim().toLowerCase();
@@ -16,12 +17,42 @@ function envInt(name, fallback) {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+function stringifyLlmContent(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        return part?.text || part?.content || '';
+      })
+      .join('');
+  }
+  if (typeof value === 'object' && typeof value.text === 'string') return value.text;
+  return '';
+}
+
+/** content 优先；json_object 空 body 时 JSON 偶尔落在 reasoning_content。 */
+function extractChoiceText(choice) {
+  const msg = choice?.message || {};
+  const content = stringifyLlmContent(msg.content).trim();
+  if (content) return content;
+  const reasoning = stringifyLlmContent(
+    msg.reasoning_content || msg.reasoning
+  ).trim();
+  if (reasoning.startsWith('{') || reasoning.startsWith('[')) return reasoning;
+  return '';
+}
+
 async function chatCompletion({
   messages,
   max_tokens = 120,
   timeoutMs,
   jsonMode = false,
   temperature,
+  thinking,
+  reasoningEffort,
+  signal,
   _attempt = 0,
 } = {}) {
   const waitMs = timeoutMs ?? envInt('LLM_TIMEOUT_MS', 20000);
@@ -43,7 +74,30 @@ async function chatCompletion({
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), waitMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, waitMs);
+  const onOuterAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) {
+      clearTimeout(timer);
+      throw new Error('LLM 请求已取消');
+    }
+    signal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+
+  const retryOpts = {
+    messages,
+    max_tokens,
+    timeoutMs: waitMs,
+    jsonMode,
+    temperature: temp,
+    thinking,
+    reasoningEffort,
+    signal,
+  };
 
   try {
     const body = {
@@ -56,6 +110,8 @@ async function chatCompletion({
     if (jsonMode) {
       body.response_format = { type: 'json_object' };
     }
+    // DeepSeek V4 等默认 thinking=on，推理 token 会计入 max_tokens，易 finish=length 且 content 为空
+    applyThinkingControls(body, { thinking, reasoningEffort });
 
     const headers = {
       'Content-Type': 'application/json',
@@ -85,14 +141,40 @@ async function chatCompletion({
           '云端还没有 LLM 代理接口（404）。请在服务器更新 cloud-api 并 pm2 restart；health 应返回 llmProxy:true'
         );
       }
+      // 上游不认非官方 enable_thinking 时，务必保留 thinking:disabled（删掉 = V4 默认思考）
+      const detailStr = String(detail);
+      if (
+        _attempt < 1 &&
+        res.status === 400 &&
+        /enable_thinking/i.test(detailStr)
+      ) {
+        clearTimeout(timer);
+        return chatCompletion({
+          ...retryOpts,
+          thinking: thinking === true ? true : false,
+          reasoningEffort: thinking === true ? reasoningEffort : 'none',
+          _attempt: _attempt + 1,
+        });
+      }
+      if (
+        _attempt < 1 &&
+        res.status === 400 &&
+        body.thinking &&
+        /thinking|reasoning/i.test(detailStr)
+      ) {
+        clearTimeout(timer);
+        return chatCompletion({
+          ...retryOpts,
+          thinking: null,
+          reasoningEffort: null,
+          _attempt: _attempt + 1,
+        });
+      }
       if (jsonMode && res.status === 400 && /response_format|json_object/i.test(String(detail))) {
         clearTimeout(timer);
         return chatCompletion({
-          messages,
-          max_tokens,
-          timeoutMs: waitMs,
+          ...retryOpts,
           jsonMode: false,
-          temperature: temp,
           _attempt,
         });
       }
@@ -100,11 +182,7 @@ async function chatCompletion({
         clearTimeout(timer);
         await new Promise((r) => setTimeout(r, 180 + Math.random() * 220));
         return chatCompletion({
-          messages,
-          max_tokens,
-          timeoutMs: waitMs,
-          jsonMode,
-          temperature: temp,
+          ...retryOpts,
           _attempt: _attempt + 1,
         });
       }
@@ -112,25 +190,36 @@ async function chatCompletion({
     }
 
     const choice = data?.choices?.[0];
-    let text = choice?.message?.content;
-    if (Array.isArray(text)) {
-      text = text
-        .map((part) => (typeof part === 'string' ? part : part?.text || ''))
-        .join('');
-    }
-    if (typeof text === 'string') text = text.trim();
+    let text = extractChoiceText(choice);
     if (!text) {
       const reason = choice?.finish_reason || choice?.finishReason || '';
       const refusal = choice?.message?.refusal || data?.error?.message || '';
+      const usage = data?.usage || {};
+      const reasoningTokens =
+        usage.completion_tokens_details?.reasoning_tokens ??
+        usage.reasoning_tokens;
+      console.warn('[bili-pet] LLM empty content', {
+        finish: reason || null,
+        jsonMode,
+        max_tokens,
+        completion: usage.completion_tokens ?? null,
+        reasoning: reasoningTokens ?? null,
+      });
       if (_attempt < 1) {
         clearTimeout(timer);
         await new Promise((r) => setTimeout(r, 160 + Math.random() * 200));
+        // json_object + 思考/小额度：V4 常 HTTP 200 但 content 为空
+        const hitLength =
+          reason === 'length' || Number(reasoningTokens) > 0;
+        const retryMax = hitLength
+          ? Math.min(2048, Math.max(Number(max_tokens) || 256, 256) * 2)
+          : Math.max(Number(max_tokens) || 0, 800);
         return chatCompletion({
-          messages,
-          max_tokens,
-          timeoutMs: waitMs,
-          jsonMode,
-          temperature: temp,
+          ...retryOpts,
+          jsonMode: false,
+          max_tokens: retryMax,
+          thinking: false,
+          reasoningEffort: 'none',
           _attempt: _attempt + 1,
         });
       }
@@ -141,13 +230,16 @@ async function chatCompletion({
     }
     return text;
   } catch (err) {
-    if (err?.name === 'AbortError') {
+    if (err?.name === 'AbortError' || err?.message === 'LLM 请求已取消') {
+      if (!timedOut && signal?.aborted) {
+        throw new Error('LLM 请求已取消');
+      }
       throw new Error(`LLM 请求超时（>${waitMs}ms）`);
     }
 
     if (
       err instanceof Error &&
-      /^LLM HTTP |无法连接 LLM|缺少 LLM_API_KEY|AI 走云端|LLM 返回空|LLM 请求超时/.test(
+      /^LLM HTTP |无法连接 LLM|缺少 LLM_API_KEY|AI 走云端|LLM 返回空|LLM 请求超时|LLM 请求已取消/.test(
         err.message
       )
     ) {
@@ -166,7 +258,50 @@ async function chatCompletion({
     throw new Error(detail || String(err));
   } finally {
     clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onOuterAbort);
   }
+}
+
+/** DeepSeek V4 默认 thinking=on。未显式打开时一律关掉。thinking=null 表示不要带该字段。 */
+function applyThinkingControls(body, { thinking, reasoningEffort } = {}) {
+  if (!body || typeof body !== 'object') return;
+
+  if (thinking === null) {
+    delete body.thinking;
+    delete body.enable_thinking;
+    delete body.reasoning_effort;
+    return;
+  }
+
+  const effortRaw =
+    reasoningEffort != null ? String(reasoningEffort).trim().toLowerCase() : '';
+  const thinkRaw =
+    thinking === false
+      ? 'disabled'
+      : thinking === true
+        ? 'enabled'
+        : thinking != null
+          ? String(thinking).trim().toLowerCase()
+          : '';
+
+  const enable =
+    thinkRaw === 'enabled' ||
+    thinkRaw === 'on' ||
+    effortRaw === 'low' ||
+    effortRaw === 'high' ||
+    effortRaw === 'max';
+
+  if (enable) {
+    body.thinking = { type: 'enabled' };
+    delete body.enable_thinking;
+    if (effortRaw === 'low' || effortRaw === 'high' || effortRaw === 'max') {
+      body.reasoning_effort = effortRaw;
+    }
+    return;
+  }
+
+  body.thinking = { type: 'disabled' };
+  body.enable_thinking = false;
 }
 
 function cloudApiBase() {
@@ -234,7 +369,10 @@ function resolveLlmRoute() {
 }
 
 async function completeTask(taskId, userContent, opts = {}) {
-  const system = getSystemPrompt(taskId);
+  let system = getSystemPrompt(taskId);
+  if (opts.systemAppend) {
+    system = `${system}\n\n${String(opts.systemAppend).trim()}`;
+  }
   const content =
     typeof userContent === 'string'
       ? userContent
@@ -245,6 +383,9 @@ async function completeTask(taskId, userContent, opts = {}) {
     timeoutMs: opts.timeoutMs,
     jsonMode: Boolean(opts.jsonMode),
     temperature: opts.temperature,
+    thinking: opts.thinking ?? false,
+    reasoningEffort: opts.reasoningEffort ?? 'none',
+    signal: opts.signal,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content },
@@ -471,13 +612,25 @@ function buildCollabUserPayload(
 ) {
   const base = buildNotesUserPayload(payload, transcriptText);
   const mode = transcriptMode === 'delta' ? 'delta' : 'full';
+  // 优先跟用户正文；正文太短再看已有 AI 补充与字幕
+  const userSignal = String(userBodyMd || '').trim();
+  const contentLanguage =
+    /[A-Za-z\u4e00-\u9fff]{8,}/.test(userSignal)
+      ? detectContentLang(userSignal)
+      : detectContentLang(
+          userBodyMd,
+          previousAiMd,
+          transcriptText || base.transcriptText,
+          base.contextText
+        );
   return {
     ...base,
     transcriptMode: mode,
+    contentLanguage,
     instruction:
       mode === 'delta'
-        ? '只更新 ai_md：结合 previousAiMd 与增量字幕增补，勿整页重写，勿改 userBodyMd。'
-        : '只生成/更新 ai_md：依据已看字幕，勿改 userBodyMd；有 previousAiMd 则增补而非重写。',
+        ? `只更新 ai_md：结合 previousAiMd 与增量字幕增补，勿整页重写，勿改 userBodyMd。${langInstruction(contentLanguage)}`
+        : `只生成/更新 ai_md：依据已看字幕，勿改 userBodyMd；有 previousAiMd 则增补而非重写。${langInstruction(contentLanguage)}`,
     userBodyMd: String(userBodyMd || ''),
     previousAiMd: String(previousAiMd || ''),
   };
@@ -564,19 +717,17 @@ function createNotesOrganizer(hooks = {}) {
     inflight = true;
     hooks.onStatus?.('正在一键整理…');
     try {
-      const raw = await completeTask(
-        'notes_collab',
-        buildCollabUserPayload(ev, userBodyMd, previousAiMd, {
-          transcriptText: transcript,
-          transcriptMode: picked.transcriptMode,
-        }),
-        {
-          max_tokens: notesMaxTokens,
-          timeoutMs: notesTimeout,
-          jsonMode: true,
-          temperature: 0.25,
-        }
-      );
+      const collabPayload = buildCollabUserPayload(ev, userBodyMd, previousAiMd, {
+        transcriptText: transcript,
+        transcriptMode: picked.transcriptMode,
+      });
+      const raw = await completeTask('notes_collab', collabPayload, {
+        max_tokens: notesMaxTokens,
+        timeoutMs: notesTimeout,
+        jsonMode: true,
+        temperature: 0.25,
+        systemAppend: langSystemLock(collabPayload.contentLanguage),
+      });
       const collab = parseCollabJson(raw, userBodyMd);
       const nextAi = String(collab.aiMd || '').trim() || previousAiMd;
       const mergedBody = mergeOrganizeBody(userBodyMd, nextAi);

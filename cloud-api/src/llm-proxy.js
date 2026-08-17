@@ -30,7 +30,7 @@ async function handleLlmChatCompletions(req, res) {
     return;
   }
 
-  const maxTokensCap = envInt('LLM_PROXY_MAX_TOKENS', 4096);
+  const maxTokensCap = envInt('LLM_PROXY_MAX_TOKENS', 8192);
   const maxTokens = Math.min(
     Math.max(1, Number(body.max_tokens) || 1200),
     maxTokensCap
@@ -53,6 +53,21 @@ async function handleLlmChatCompletions(req, res) {
   };
   if (body.response_format && typeof body.response_format === 'object') {
     upstreamBody.response_format = body.response_format;
+  }
+  // DeepSeek V4：未显式开启则关闭思考。只转发官方 thinking 字段，
+  // 不要带 enable_thinking（官方会 400，客户端若因此删掉 thinking 就会回到默认思考）。
+  if (body.thinking && typeof body.thinking === 'object') {
+    const t = String(body.thinking.type || '').trim().toLowerCase();
+    if (t === 'enabled' || t === 'disabled') {
+      upstreamBody.thinking = { type: t };
+    }
+  } else {
+    upstreamBody.thinking = { type: 'disabled' };
+  }
+  const effort = String(body.reasoning_effort || '').trim().toLowerCase();
+  if (effort === 'low' || effort === 'high' || effort === 'max') {
+    upstreamBody.reasoning_effort = effort;
+    upstreamBody.thinking = { type: 'enabled' };
   }
 
   const controller = new AbortController();

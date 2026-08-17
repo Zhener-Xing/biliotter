@@ -12,6 +12,7 @@ module.exports = {
 6. 只依据提供材料，禁止编造；广告忽略。
 7. ai_md 用短列表与 ## 小标题；公式 $...$ / $$...$$；控制在必要篇幅，勿注水。
 8. 若存在previousAiMd，则基于previousAiMd和userBodyMd生成ai_md，否则基于userBodyMd生成ai_md，不得推翻previousAiMd，可以进行格式整理。
+9. 输出语言必须与 contentLanguage 一致：zh=中文，en=英文。优先跟随 userBodyMd；用户笔记以英文为主时 ai_md 必须用英文，不要翻译成中文。
 
 只输出 JSON（无围栏、无其它说明）：
 {"title":"无标题时填写否则空串","ai_md":"仅 AI 补充 Markdown"}`,

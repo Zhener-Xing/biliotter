@@ -7,7 +7,7 @@
     36, 201, 124, 228, 207, 208, 209, 229, 122, 39, 96, 98,
     1010, 2084, 2085, 2086, 2087, 2088, 2089, 2090, 2091, 2092, 2093, 2094, 2095,
   ]);
-  const STUDY_ZONE_RE = /学习|知识|课堂/;
+  const STUDY_ZONE_RE = /学习|知识|课堂|教育|应试|科普|考研|职场/;
 
   const state = {
     enabled: true,
@@ -33,12 +33,15 @@
     subtitleRetryTimer: null,
     subtitleRetries: 0,
     loadToken: 0,
+    _onTimeUpdate: null,
+    _onSeeked: null,
   };
 
   function isStudyRelatedMeta(meta = {}) {
     const tid = Number(meta.tid);
     const tidV2 = Number(meta.tid_v2 ?? meta.tidV2);
-    if (STUDY_ZONE_TIDS.has(tid) || STUDY_ZONE_TIDS.has(tidV2)) return true;
+    if (Number.isFinite(tid) && STUDY_ZONE_TIDS.has(tid)) return true;
+    if (Number.isFinite(tidV2) && STUDY_ZONE_TIDS.has(tidV2)) return true;
     const labels = [meta.tname, meta.tname_v2 ?? meta.tnameV2]
       .map((s) => String(s || ''))
       .join(' ');
@@ -203,6 +206,17 @@
     }, 4000);
   }//计划字幕重试 
 
+  function sendSessionMeta(extra = {}) {
+    send(
+      schema.envelope('session_meta', {
+        ...getContext(),
+        owner: state.owner,
+        transcriptText: state.transcript,
+        ...extra,
+      })
+    );
+  }
+
   async function ensureSubtitles({ force = false } = {}) {
     if (!state.bvid) return null;
     const token = ++state.loadToken;
@@ -234,9 +248,22 @@
         studyRelated: state.studyRelated,
       };
 
+      // 分区信息先于字幕送达桌面，避免某分 P 无字幕时学习时长一直为 0
+      sendSessionMeta({
+        subtitleStatus: 'loading',
+        lan: null,
+        lineCount: 0,
+        needLogin: false,
+        fullSubtitleText: '',
+      });
+
       const pack = await BiliSubtitle.load(lockedBvid, meta.cid, { force, page });
       if (token !== state.loadToken || state.bvid !== lockedBvid) return null;
-      if (!packIsForCurrent(pack)) return null;
+      if (!packIsForCurrent(pack)) {
+        scheduleSubtitleRetries();
+        syncProgress(true);
+        return null;
+      }
 
       // 换轨/重载时必须清空旧长串，否则会把串台内容拼进去
       resetTranscript();
@@ -246,18 +273,13 @@
       fetch('http://127.0.0.1:7383/ingest/5054654b-aba0-404a-ac16-c602aa116055',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d429e3'},body:JSON.stringify({sessionId:'d429e3',hypothesisId:'J',location:'video.js:ensureSubtitles',message:'subtitle pack loaded',data:{bvid:lockedBvid,status:pack?.status||null,bodyLen:pack?.body?.length||0,fullTextLen:String(pack?.fullText||'').length,lan:pack?.meta?.lan||null,needLogin:Boolean(pack?.meta?.needLogin)},timestamp:Date.now()})}).catch(()=>{});
       // #endregion
 
-      send(
-        schema.envelope('session_meta', {
-          ...getContext(),
-          owner: state.owner,
-          subtitleStatus: pack.status,
-          lan: pack.meta?.lan || null,
-          lineCount: pack.body?.length || 0,
-          needLogin: Boolean(pack.meta?.needLogin),
-          transcriptText: state.transcript,
-          fullSubtitleText: pack.fullText || '',
-        })
-      );
+      sendSessionMeta({
+        subtitleStatus: pack.status,
+        lan: pack.meta?.lan || null,
+        lineCount: pack.body?.length || 0,
+        needLogin: Boolean(pack.meta?.needLogin),
+        fullSubtitleText: pack.fullText || '',
+      });
 
       if (pack.status === 'ok' && pack.body?.length) {
         stopSubtitleRetries();
@@ -268,6 +290,7 @@
         syncProgress(true);
       } else {
         scheduleSubtitleRetries();
+        syncProgress(true);
       }
       return pack;
     } catch (err) {
@@ -281,7 +304,18 @@
           page: state.page ?? parsePage(),
         })
       );
+      // 即使字幕失败，仍尽量推一次 meta（若 resolveCid 已成功过则 studyRelated 已有）
+      if (state.videoMeta) {
+        sendSessionMeta({
+          subtitleStatus: 'error',
+          lan: null,
+          lineCount: 0,
+          needLogin: false,
+          fullSubtitleText: '',
+        });
+      }
       scheduleSubtitleRetries();
+      syncProgress(true);
       return null;
     }
   }//构建字幕切片
@@ -331,9 +365,36 @@
     const video = state.videoEl || findVideoElement();
     state.videoEl = video;
     if (!video || !state.bvid || !state.sessionId) return;
-    if (!packIsForCurrent(state.subtitlePack)) return;
 
     const t = video.currentTime || 0;
+    const hasPack = packIsForCurrent(state.subtitlePack);
+
+    // 学习时长心跳不依赖字幕：多分 P / 某集无字幕时仍应累计
+    const now = Date.now();
+    if (now - state.lastBridgeAt >= cfg.BRIDGE_THROTTLE_MS) {
+      state.lastBridgeAt = now;
+      const slice = hasPack
+        ? buildSubtitleSlice(t)
+        : {
+            currentSubtitle: null,
+            contextText: '',
+            transcriptText: state.transcript,
+            modelInput: null,
+          };
+      send(
+        schema.envelope('heartbeat', {
+          ...getContext(),
+          priority: 'low',
+          subtitleStatus: state.subtitlePack?.status || null,
+          currentSubtitle: slice.currentSubtitle,
+          contextText: slice.contextText,
+          transcriptText: state.transcript,
+          modelInput: slice.modelInput,
+        })
+      );
+    }
+
+    if (!hasPack) return;
     if (!force && Math.abs(t - state.lastTime) < 0.2) return;
     state.lastTime = t;
 
@@ -361,22 +422,6 @@
         schema.envelope('progress', {
           ...getContext(),
           priority: 'normal',
-          subtitleStatus: state.subtitlePack?.status || null,
-          currentSubtitle: slice.currentSubtitle,
-          contextText: slice.contextText,
-          transcriptText: state.transcript,
-          modelInput: slice.modelInput,
-        })
-      );
-    }
-
-    const now = Date.now();
-    if (now - state.lastBridgeAt >= cfg.BRIDGE_THROTTLE_MS) {
-      state.lastBridgeAt = now;
-      send(
-        schema.envelope('heartbeat', {
-          ...getContext(),
-          priority: 'low',
           subtitleStatus: state.subtitlePack?.status || null,
           currentSubtitle: slice.currentSubtitle,
           contextText: slice.contextText,
@@ -466,14 +511,21 @@
 
     let tries = 0;
     const waitVideo = setInterval(() => {
-      state.videoEl = findVideoElement();
+      const el = findVideoElement();
       tries += 1;
-      if (state.videoEl || tries > 40) {
+      if (el || tries > 40) {
         clearInterval(waitVideo);
-        if (!state.videoEl) return;
-        seedTranscriptUpTo(state.videoEl.currentTime || 0);
-        state.videoEl.addEventListener('timeupdate', () => syncProgress(false));
-        state.videoEl.addEventListener('seeked', () => syncProgress(true));
+        if (!el) return;
+        if (state._onTimeUpdate && state.videoEl) {
+          state.videoEl.removeEventListener('timeupdate', state._onTimeUpdate);
+          state.videoEl.removeEventListener('seeked', state._onSeeked);
+        }
+        state.videoEl = el;
+        state._onTimeUpdate = () => syncProgress(false);
+        state._onSeeked = () => syncProgress(true);
+        seedTranscriptUpTo(el.currentTime || 0);
+        el.addEventListener('timeupdate', state._onTimeUpdate);
+        el.addEventListener('seeked', state._onSeeked);
         syncProgress(true);
       }
     }, 250);

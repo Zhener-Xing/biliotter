@@ -500,7 +500,7 @@ function handleEvent(payload) {
           status === 'first_pull_blocked' ||
           status === 'local_ready')
       ) {
-        if (uid) dataPullWinPlayedForUid = null;
+        // 不再清空 dataPullWinPlayedForUid：拉取中反复 reset 会导致成功提示音连播
         showPetBubble('数据拉取中', 12000);
       } else if (
         status === 'ready' &&
@@ -508,17 +508,27 @@ function handleEvent(payload) {
         payload.opsReady
       ) {
         if (uid) cloudPullReadyUid = uid;
-        // 命中本地库：直接可用，不弹「数据拉取中/完成」
-        if (payload.fromLocal || payload.reason === 'local_sqlite_hit') {
+        // 命中本地库 / 后台同步：直接可用，不弹「数据拉取中/完成」
+        if (
+          payload.fromLocal ||
+          payload.reason === 'local_sqlite_hit' ||
+          payload.background ||
+          payload.celebrate === false
+        ) {
           hidePetBubble();
           stopDanceBuffer();
-        } else if (!payload.background || payload.pulled) {
+        } else if (payload.celebrate === true || payload.pulled) {
           hidePetBubble();
-          showPetBubble('数据拉取完成', 3500);
           if (uid && dataPullWinPlayedForUid !== uid) {
             dataPullWinPlayedForUid = uid;
+            showPetBubble('数据拉取完成', 3500);
             playSfx('assets/noise/win.mp3');
+          } else {
+            hidePetBubble();
           }
+          stopDanceBuffer();
+        } else {
+          hidePetBubble();
           stopDanceBuffer();
         }
       } else if (status === 'local_ready' || status === 'account_switched') {
@@ -532,7 +542,12 @@ function handleEvent(payload) {
     case 'kb_account_ready': {
       stopDanceBuffer();
       const uid = String(payload.uid || '');
-      if (payload.dataPullDone && uid) {
+      if (payload.fromLocal || payload.celebrate === false) {
+        if (uid) cloudPullReadyUid = uid;
+        hidePetBubble();
+        break;
+      }
+      if (payload.dataPullDone && uid && (payload.celebrate === true || payload.pulled)) {
         cloudPullReadyUid = uid;
         if (dataPullWinPlayedForUid !== uid) {
           dataPullWinPlayedForUid = uid;
@@ -540,6 +555,9 @@ function handleEvent(payload) {
           showPetBubble('数据拉取完成', 3500);
           playSfx('assets/noise/win.mp3');
         }
+      } else if (uid) {
+        cloudPullReadyUid = uid;
+        hidePetBubble();
       }
       break;
     }

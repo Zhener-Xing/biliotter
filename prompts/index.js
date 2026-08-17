@@ -2,6 +2,7 @@ const chat = require('./chat');
 const notesCollab = require('./notes_collab');
 const courseAction = require('./course_action');
 const mindmapCourse = require('./mindmap_course');
+const mindmapExpand = require('./mindmap_expand');
 const gameQuiz = require('./game_quiz');
 const gameScope = require('./game_scope');
 const learningPlan = require('./learning_plan');
@@ -11,6 +12,7 @@ const PROMPTS = {
   [notesCollab.id]: notesCollab,
   [courseAction.id]: courseAction,
   [mindmapCourse.id]: mindmapCourse,
+  [mindmapExpand.id]: mindmapExpand,
   [gameQuiz.id]: gameQuiz,
   [gameScope.id]: gameScope,
   [learningPlan.id]: learningPlan,
