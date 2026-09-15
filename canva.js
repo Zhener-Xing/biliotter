@@ -158,6 +158,41 @@ function pidFile() {
 
 const PET_WINDOW = { width: 160, height: 180 };
 
+/** macOS native / browser fullscreen sits above the default alwaysOnTop level. */
+function pinAboveFullscreen(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver');
+  } catch (err) {
+    win.setAlwaysOnTop(true);
+  }
+  if (typeof win.setVisibleOnAllWorkspaces === 'function') {
+    try {
+      win.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true,
+      });
+    } catch (err) {
+      win.setVisibleOnAllWorkspaces(true);
+    }
+  }
+  if (typeof win.setFullScreenable === 'function') {
+    win.setFullScreenable(false);
+  }
+}
+
+function overlayBrowserWindow(opts) {
+  const win = new BrowserWindow({
+    fullscreenable: false,
+    ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
+    ...opts,
+  });
+  pinAboveFullscreen(win);
+  win.on('show', () => pinAboveFullscreen(win));
+  win.on('blur', () => pinAboveFullscreen(win));
+  return win;
+}
+
 const HOME_PAGE = HOME_URL;
 
 let mainWindow;
@@ -299,7 +334,7 @@ async function goHome(opts = {}) {
   }
 
   const bounds = homePageBounds();
-  homeWindow = new BrowserWindow({
+  homeWindow = overlayBrowserWindow({
     ...bounds,
     icon: APP_ICON,
     frame: false,
@@ -356,6 +391,7 @@ function setMainPetHidden(hidden) {
   } else if (!mainWindow.isVisible()) {
     if (typeof mainWindow.showInactive === 'function') mainWindow.showInactive();
     else mainWindow.show();
+    pinAboveFullscreen(mainWindow);
   }
 }
 
@@ -598,7 +634,7 @@ function openNotesWindow() {
   }
 
   const bounds = notesPageBounds();
-  notesWindow = new BrowserWindow({
+  notesWindow = overlayBrowserWindow({
     ...bounds,
     icon: APP_ICON,
     transparent: true,
@@ -666,7 +702,7 @@ function openChatWindow() {
   }
 
   const bounds = chatPageBounds();
-  chatWindow = new BrowserWindow({
+  chatWindow = overlayBrowserWindow({
     ...bounds,
     icon: APP_ICON,
     transparent: true,
@@ -717,7 +753,7 @@ function openFriendsWindow() {
   }
 
   const bounds = friendsPageBounds();
-  friendsWindow = new BrowserWindow({
+  friendsWindow = overlayBrowserWindow({
     ...bounds,
     icon: APP_ICON,
     transparent: true,
@@ -745,7 +781,7 @@ function openFriendsWindow() {
 }
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  mainWindow = overlayBrowserWindow({
     width: PET_WINDOW.width,
     height: PET_WINDOW.height,
     icon: APP_ICON,

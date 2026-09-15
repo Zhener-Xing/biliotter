@@ -171,7 +171,10 @@
       .edit-split,
       .code-fence-pop,
       .preview-body,
-      .activity-card {
+      .activity-card,
+      #course-mm-elixir,
+      #course-mm-elixir *,
+      .mm-ctx {
         -webkit-app-region: no-drag;
       }
       .main-toolbar .spacer {
@@ -1409,10 +1412,17 @@
         width: 100%;
         height: 100%;
         min-height: 240px;
+        -webkit-app-region: no-drag;
       }
 
       #course-mm-elixir .map-container {
         background-color: transparent;
+        cursor: grab;
+        -webkit-app-region: no-drag;
+      }
+
+      #course-mm-elixir .map-container:active {
+        cursor: grabbing;
       }
 
       .course-mm-hint {
@@ -1973,7 +1983,7 @@
             ></textarea>
             <div class="course-mm-map" id="course-mm-map">
               <div id="course-mm-elixir"></div>
-              <p class="course-mm-hint">拖节点改结构 · 右键菜单 · 选中后「AI 展开」· 双击改名</p>
+              <p class="course-mm-hint">拖节点改结构 · 空白处拖动画布 · 滚轮缩放 · 右键菜单 · 双击改名</p>
             </div>
           </div>
         </div>
@@ -3165,7 +3175,6 @@
             el: courseMmHost,
             direction: Ctor.SIDE != null ? Ctor.SIDE : 2,
             editable: true,
-            draggable: true,
             toolBar: true,
             keypress: true,
             allowUndo: true,
@@ -3205,6 +3214,40 @@
               },
             },
           });
+          // 空白处左键：旧版 Markmap 是拖动画布；Mind Elixir 默认会框选，这里改回平移
+          if (mmInstance.container && !mmInstance.container._mmPanBlank) {
+            mmInstance.container._mmPanBlank = true;
+            mmInstance.container.addEventListener(
+              "pointerdown",
+              function (e) {
+                if (!mmInstance || !mmInstance.panHelper) return;
+                if (e.button !== 0 || e.pointerType !== "mouse") return;
+                const t = e.target;
+                if (!t || t.className !== "map-container") return;
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                const ph = mmInstance.panHelper;
+                mmInstance.spacePressed = true;
+                mmInstance.container.classList.add("space-pressed");
+                ph.handlePointerDown(e);
+                const onMove = function (ev) {
+                  ph.handlePointerMove(ev);
+                };
+                const onUp = function (ev) {
+                  ph.handlePointerUp(ev);
+                  mmInstance.spacePressed = false;
+                  mmInstance.container.classList.remove("space-pressed");
+                  window.removeEventListener("pointermove", onMove, true);
+                  window.removeEventListener("pointerup", onUp, true);
+                  window.removeEventListener("pointercancel", onUp, true);
+                };
+                window.addEventListener("pointermove", onMove, true);
+                window.addEventListener("pointerup", onUp, true);
+                window.addEventListener("pointercancel", onUp, true);
+              },
+              true
+            );
+          }
           mmInstance.bus.addListener("operation", function (op) {
             if (!op || op.name === "beginEdit") return;
             if (op.name === "removeNodes" || op.name === "removeNode") {
